@@ -24,7 +24,10 @@ STATUS = {
     35: "suspicious", 36: "timeout", 37: "caught by type check", -24: "timeout",
     24: "timeout", 152: "timeout", 255: "timeout", -11: "segfault", -9: "segfault",
 }
-NOT_CHECKED, SURVIVED, NO_TESTS = None, 0, 33
+NOT_CHECKED, SURVIVED = None, 0
+# Codes that are no verdict on the mutant: not checked, interrupted by the user, and both of
+# mutmut's "no tests". A cached one of these is run again.
+UNSETTLED = (NOT_CHECKED, 2, 5, 33)
 # A .meta is a few hundred bytes per mutant; this is beyond any real module's.
 MAX_META_BYTES = 64 * 1024 * 1024
 MUTANT = "__mutmut_"
@@ -82,13 +85,13 @@ def read_meta(wt: Path) -> Verdicts:
 
 
 def needed(verdicts: Verdicts, scope: set[str], survivors: bool) -> set[str]:
-    """Unchecked or untested mutants of in-scope modules, and every survivor if ``survivors``.
+    """In-scope mutants with no verdict yet (UNSETTLED), and every survivor if ``survivors``.
 
     Survivors are re-run because mutmut's cache is keyed on source, not tests: re-running them
     is the only way a newly added killing test is noticed.
     """
     return {key for path, codes in verdicts.items() for key, code in codes.items()
-            if (path in scope and code in (NOT_CHECKED, NO_TESTS))
+            if (path in scope and code in UNSETTLED)
             or (survivors and code == SURVIVED)}
 
 

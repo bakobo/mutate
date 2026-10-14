@@ -131,3 +131,12 @@ def test_survivors_are_found_anywhere():
     assert meta.survivors(VERDICTS) == [
         ("pkg.a.x" + SEP + "C" + SEP + "m__mutmut_1", "src/pkg/a.py"),
         ("pkg.b.x_h__mutmut_2", "src/pkg/b.py")]
+
+
+@pytest.mark.parametrize("code", [2, 5])
+def test_an_interrupted_or_other_no_tests_verdict_in_scope_is_needed_again(code):
+    # mutmut 3.8 records 2 for a check the user interrupted and 5 as a second "no tests"; neither
+    # is a verdict on the mutant, so a cache holding one must not keep it from being run.
+    verdicts = {"src/pkg/a.py": {"pkg.a.x_f__mutmut_1": code, "pkg.a.x_f__mutmut_2": 1}}
+    assert meta.needed(verdicts, {"src/pkg/a.py"}, survivors=False) == {"pkg.a.x_f__mutmut_1"}
+    assert meta.needed(verdicts, set(), survivors=True) == set()
