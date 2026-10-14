@@ -168,7 +168,7 @@ def test_ticks_counts_diagnostic_survivors_and_files_the_rest(ledger_repo, tmp_p
         record("c" * 12, 16, ['    raise ValueError("a", self.x)'],
                ['    raise ValueError("a", None)'], file="src/gone.py"),
     ]}))
-    assert ticks.main(["--root", str(root), "--report", str(report), "--tick", str(tick)]) == 0
+    assert ticks.main([str(root), "--report", str(report), "--tick", str(tick)]) == 0
     adds = [line for line in (tick.parent / "tick.log").read_text().splitlines()
             if line.startswith("add")]
     assert len(adds) == 2 and "[m:bbbbbbbbbbbb]" in adds[0] and "[m:cccccccccccc]" in adds[1]

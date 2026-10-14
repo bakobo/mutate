@@ -260,6 +260,7 @@ def test_ticks_files_only_new_survivors(sample, tmp_path, capsys):
     notes = [c for c in log if c[0] == "note"]
     assert len(notes) == 2 and notes[0][1] == "4ghi"
     assert "commit c0ffee" in notes[0][2] and "-a\n+b" in notes[0][2]
+    assert "survived a bakobo-mutate run" in notes[0][2] and "nightly" not in notes[0][2]
     assert "Test command: pytest -n0 --no-cov" in notes[0][2]
     assert ("filed 2; 2 already ticked; 0 re-noted; 0 string-only and 0 diagnostic survivors "
             "not ticked; 4 survivors" in capsys.readouterr().out)
@@ -275,33 +276,68 @@ def test_ticks_dry_run_files_nothing(sample, tmp_path, capsys):
     assert "would file 2; 2 already ticked" in out
 
 
-def test_ticks_downloads_the_latest_run(sample, tmp_path):
-    gh = stub(tmp_path / "ghbin", "gh", {"run": {"by_arg": {
-        ".[0].databaseId": {"out": "123\n"}}, "default": {"copy": str(sample)}}})
+def test_ticks_reads_the_targets_own_report_by_default(sample, tmp_path, capsys):
+    root = tmp_path / "target"
+    (root / ".ignored" / "mutation").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (root / ".ignored" / "mutation" / "report.json").write_text(sample.read_text())
     tick = tick_stub(tmp_path)
-    assert ticks.main(["--gh", str(gh), "--tick", str(tick), "--dry-run"]) == 0
-    first, second = calls(tmp_path / "ghbin")
-    assert first[:4] == ["run", "list", "--workflow", "mutation.yml"]
-    # Only scheduled runs on main: a manual run of a feature branch is never "the latest".
-    assert first[first.index("--branch") + 1] == "main"
-    assert first[first.index("--event") + 1] == "schedule"
-    assert second[:5] == ["run", "download", "123", "--name", "mutation-report"]
+    assert ticks.main([str(root), "--tick", str(tick), "--dry-run"]) == 0
+    assert "would file 2" in capsys.readouterr().out
 
 
-def test_ticks_downloads_a_named_run(sample, tmp_path):
-    gh = stub(tmp_path / "ghbin", "gh", {"run": {"copy": str(sample)}})
-    tick = tick_stub(tmp_path)
-    assert ticks.main(["--run-id", "77", "--gh", str(gh), "--tick", str(tick),
-                       "--dry-run"]) == 0
-    assert calls(tmp_path / "ghbin")[0][:3] == ["run", "download", "77"]
+def test_ticks_finds_the_target_around_the_cwd(sample, tmp_path, monkeypatch, capsys):
+    root = tmp_path / "target"
+    (root / "docs").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    git(root, "init", "-q", "-b", "main")
+    (root / ".ignored" / "mutation").mkdir(parents=True)
+    (root / ".ignored" / "mutation" / "report.json").write_text(sample.read_text())
+    monkeypatch.chdir(root / "docs")
+    assert ticks.main(["--tick", str(tick_stub(tmp_path)), "--dry-run"]) == 0
+    assert "would file 2" in capsys.readouterr().out
 
 
-def test_ticks_without_a_successful_run(tmp_path, capsys):
-    gh = stub(tmp_path / "ghbin", "gh", {"run": {"out": "\n"}})
-    assert ticks.main(["--gh", str(gh)]) == 1
+def test_ticks_outside_a_repo_is_refused(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert ticks.main(["--tick", "/nonexistent"]) == 2
+    assert capsys.readouterr().err.startswith("e.state.missing.git-repo.f: ")
+
+
+def test_ticks_without_a_report_says_to_run_first(tmp_path, capsys):
+    root = tmp_path / "target"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    assert ticks.main([str(root), "--tick", "/nonexistent"]) == 1
     err = capsys.readouterr().err
     assert err.startswith(f"{ticks.NO_REPORT.code}: ") and ticks.NO_REPORT.code.endswith(".r")
-    assert f"Hint: {ticks.NO_REPORT.hint}" in err
+    assert str(root / ".ignored" / "mutation" / "report.json") in err
+    assert "bakobo-mutate run" in err and "nightly" not in err
+
+
+def test_the_download_path_is_gone():
+    assert not hasattr(ticks, "download")
+    with pytest.raises(SystemExit):
+        ticks.parse(["--run-id", "1"])
+    with pytest.raises(SystemExit):
+        ticks.parse(["--gh", "gh"])
+
+
+@pytest.mark.parametrize("text", [ticks.MALFORMED.title, ticks.MALFORMED.hint,
+                                  ticks.NO_REPORT.title, ticks.NO_REPORT.detail,
+                                  ticks.NO_REPORT.hint, ticks.FAILED_RUN.hint,
+                                  ticks.__doc__], ids=["malformed-title", "malformed-hint",
+                                                       "no-report-title", "no-report-detail",
+                                                       "no-report-hint", "failed-hint", "doc"])
+def test_the_prose_describes_the_tool_as_it_now_is(text):
+    for stale in ("nightly", "tools/mutation", "mutate.py", "workflow", "scheduled"):
+        assert stale not in text
+
+
+def test_the_error_codes_are_unchanged():
+    assert (ticks.MALFORMED.code, ticks.NO_REPORT.code, ticks.FAILED_RUN.code) == (
+        "e.input.format.mutation-report.f", "e.state.mutation-report-missing.r",
+        "e.state.mutation-run-failed.f")
 
 
 def test_ticks_refuses_a_failed_report(tmp_path, capsys):
@@ -438,7 +474,7 @@ def test_ticks_files_utinas_behavioural_survivors(tmp_path, capsys):
     root = sinks_root(tmp_path, f"[tool.mutation]\nmessage_sinks = {list(UTINA_SINKS)!r}\n")
     tick = tick_stub(tmp_path)
     assert ticks.main(["--report", str(real_report(tmp_path, "utina")), "--tick",
-                       str(tick), "--root", str(root)]) == 0
+                       str(tick), str(root)]) == 0
     adds = [c[-1] for c in calls(tmp_path / "tickbin") if c[0] == "add"]
     assert sorted(a.split()[2] for a in adds) == [
         "[m:3844d16a640a]", "[m:e594c88ec0cc]", "[m:eb3b234984ca]"]
@@ -620,7 +656,13 @@ def test_an_oversized_report_is_refused_unread(tmp_path, capsys, monkeypatch):
 
 def test_a_missing_report_is_refused(tmp_path, capsys):
     absent = str(tmp_path / "absent.json")
-    assert ticks.main(["--report", absent, "--tick", "/nonexistent"]) == 2
+    assert ticks.main(["--report", absent, "--tick", "/nonexistent"]) == 1
+    assert capsys.readouterr().err.startswith(f"{ticks.NO_REPORT.code}: ")
+
+
+def test_an_unreadable_report_file_is_malformed(tmp_path, capsys):
+    (tmp_path / "dir.json").mkdir()
+    assert ticks.main(["--report", str(tmp_path / "dir.json"), "--tick", "/nonexistent"]) == 2
     assert "could not be read" in capsys.readouterr().err
 
 
@@ -862,7 +904,7 @@ def test_ticks_honours_a_sink_this_repo_declares(tmp_path, capsys):
     root = sinks_root(tmp_path, '[tool.mutation]\nmessage_sinks = ["Refusal.missing"]\n')
     tick = stub(tmp_path / "tickbin", "tick", {"ls": "(no ticks)\n"})
     path = declared_report(tmp_path, "declared Refusal.missing")
-    assert ticks.main(["--report", str(path), "--tick", str(tick), "--root", str(root)]) == 0
+    assert ticks.main(["--report", str(path), "--tick", str(tick), str(root)]) == 0
     assert [c[0] for c in calls(tmp_path / "tickbin")] == ["ls"]
     assert "1 string-only and 0 diagnostic survivors not ticked" in capsys.readouterr().out
 
@@ -872,7 +914,7 @@ def test_ticks_files_a_survivor_whose_sink_is_no_longer_declared(tmp_path):
     root = sinks_root(tmp_path, '[project]\nname = "x"\n')
     tick = stub(tmp_path / "tickbin", "tick", {"ls": "(no ticks)\n", "add": "4ghi  t\n"})
     path = declared_report(tmp_path, "declared Refusal.missing")
-    assert ticks.main(["--report", str(path), "--tick", str(tick), "--root", str(root)]) == 0
+    assert ticks.main(["--report", str(path), "--tick", str(tick), str(root)]) == 0
     assert [c[0] for c in calls(tmp_path / "tickbin")] == ["ls", "add", "note"]
 
 
@@ -880,7 +922,7 @@ def test_ticks_refuses_a_malformed_declaration_before_the_ledger(tmp_path, capsy
     root = sinks_root(tmp_path, '[tool.mutation]\nmessage_sinks = [1]\n')
     tick = tick_stub(tmp_path)
     path = declared_report(tmp_path, "declared Refusal.missing")
-    assert ticks.main(["--report", str(path), "--tick", str(tick), "--root", str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", str(tick), str(root)]) == 2
     err = capsys.readouterr().err
     assert err.startswith(f"{mutate.SINKS_MALFORMED.code}: ")
     assert f"Hint: {mutate.SINKS_MALFORMED.hint}" in err
@@ -890,14 +932,13 @@ def test_ticks_refuses_a_malformed_declaration_before_the_ledger(tmp_path, capsy
 def test_ticks_refuses_an_unreadable_pyproject(tmp_path, capsys):
     root = sinks_root(tmp_path, "this is = not [toml")
     path = declared_report(tmp_path, None)
-    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", "--root",
-                       str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", str(root)]) == 2
     assert capsys.readouterr().err.startswith(f"{mutate.SINKS_MALFORMED.code}: ")
 
 
-def test_ticks_finds_the_repo_root_by_default():
-    # Installed as a tool, the module sits in no repo, so the repo is the one it is run from.
-    assert ticks.parse([]).root == Path.cwd()
+def test_ticks_takes_the_target_as_a_positional_argument():
+    assert ticks.parse([]).target is None
+    assert ticks.parse(["/x"]).target == Path("/x")
 
 
 # --- second hostile pass on message sinks ----------------------------------------------------
@@ -1007,8 +1048,7 @@ def test_every_malformed_config_is_a_coded_refusal(tmp_path, capsys, body, probl
     else:
         pyproject.write_text(body)
     path = declared_report(tmp_path, None)
-    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", "--root",
-                       str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", str(root)]) == 2
     err = capsys.readouterr().err
     assert err.startswith(f"{mutate.SINKS_MALFORMED.code}: ") and problem in err
 
@@ -1040,8 +1080,7 @@ def test_an_oversized_pyproject_is_refused_before_it_is_decoded(tmp_path, capsys
     monkeypatch.setattr(shared, "MAX_PYPROJECT_BYTES", 64)
     root = sinks_root(tmp_path, "# " + "x" * 100 + "\n")
     path = declared_report(tmp_path, None)
-    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", "--root",
-                       str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", str(root)]) == 2
     err = capsys.readouterr().err
     assert err.startswith(f"{mutate.SINKS_MALFORMED.code}: ") and "larger than 64 bytes" in err
 
@@ -1058,8 +1097,7 @@ def test_a_deeply_nested_pyproject_is_a_coded_refusal(tmp_path, capsys, monkeypa
     monkeypatch.setattr(shared.tomllib, "loads", too_deep)
     root = sinks_root(tmp_path, "[tool.mutation]\nmessage_sinks = []\n")
     path = declared_report(tmp_path, None)
-    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", "--root",
-                       str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", str(root)]) == 2
     err = capsys.readouterr().err
     assert err.startswith(f"{mutate.SINKS_MALFORMED.code}: ") and "nested too deeply" in err
 
@@ -1068,8 +1106,7 @@ def test_a_missing_pyproject_is_a_coded_refusal(tmp_path, capsys):
     root = tmp_path / "empty"
     root.mkdir()
     path = declared_report(tmp_path, None)
-    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", "--root",
-                       str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", str(root)]) == 2
     assert capsys.readouterr().err.startswith(f"{mutate.SINKS_MALFORMED.code}: ")
 
 
