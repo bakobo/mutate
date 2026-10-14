@@ -363,13 +363,36 @@ class Plan:
     sinks: tuple[str, ...] = ()
 
 
+def _interrupted(outcome: Outcome) -> None:
+    outcome.complete = False
+    outcome.interrupted, outcome.note = True, INTERRUPTED_NOTE
+
+
+def _run_needed(wt: Path, plan: Plan, mutmut: str, log: Path, verdicts: meta.Verdicts,
+                outcome: Outcome) -> None:
+    """Run the needed mutants chunk by chunk; an interrupt anywhere here stops the run."""
+    try:
+        names = meta.names(verdicts, meta.needed(verdicts, set(plan.modules), plan.survivors))
+        if not names:
+            outcome.note = NOTHING_NEEDED
+        for chunk in meta.chunks(names, plan.chunk):
+            code, output = run_mutmut(mutmut, chunk, log, wt)
+            if code is None:
+                _interrupted(outcome)
+                return
+            if code != 0:
+                outcome.failure = _failed(code, output)
+                return
+    except KeyboardInterrupt:
+        _interrupted(outcome)
+
+
 def mutate(wt: Path, plan: Plan, mutmut: str, log: Path) -> Outcome:
     """Generate, run what is needed, and read back every verdict; never raises a BakoboError."""
     outcome = Outcome(modules=plan.modules)
     code, output = run_mutmut(mutmut, [GENERATE_ONLY], log, wt)
     if code is None:
-        outcome.complete = False
-        outcome.interrupted, outcome.note = True, INTERRUPTED_NOTE
+        _interrupted(outcome)
     elif code != 1 or NOTHING_MATCHES not in output or CLEAN_TEST_FAILED in output:
         outcome.failure = _failed(code, output)
         return outcome
@@ -377,19 +400,8 @@ def mutate(wt: Path, plan: Plan, mutmut: str, log: Path) -> Outcome:
         outcome.generated = True
     try:
         verdicts = meta.read_meta(wt)
-        need = meta.needed(verdicts, set(plan.modules), plan.survivors)
-        names = [] if outcome.interrupted else meta.names(verdicts, need)
-        if not outcome.interrupted and not names:
-            outcome.note = NOTHING_NEEDED
-        for chunk in meta.chunks(names, plan.chunk):
-            code, output = run_mutmut(mutmut, chunk, log, wt)
-            if code is None:
-                outcome.complete = False
-                outcome.interrupted, outcome.note = True, INTERRUPTED_NOTE
-                break
-            if code != 0:
-                outcome.failure = _failed(code, output)
-                break
+        if not outcome.interrupted:
+            _run_needed(wt, plan, mutmut, log, verdicts, outcome)
         verdicts = meta.read_meta(wt)
     except BakoboError as error:
         outcome.failure = error

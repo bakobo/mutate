@@ -485,6 +485,23 @@ def test_an_interrupted_run_is_incomplete_and_the_next_finishes_it(target, fake,
     assert all(k not in checked for r in fake.runs()[1:] for k in r if k in (S2, S3, O2))
 
 
+def test_an_interrupt_between_chunks_still_reports(target, fake, uv, monkeypatch):
+    target, _ = target
+    real = meta.chunks
+
+    def first_then_interrupt(names, size):
+        chunks = real(names, size)
+        yield next(chunks)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(meta, "chunks", first_then_interrupt)
+    assert run(target, fake, uv, "--chunk", "1") == mutate.INTERRUPTED
+    assert len(fake.runs()) == 2
+    report, _, stamp = outputs(target)
+    assert report["complete"] is False and "interrupted" in report["note"]
+    assert stamp["modules"]["src/pkg/other.py"]["complete"] is False
+
+
 def test_an_interrupt_during_generation_runs_nothing_more(target, fake, uv):
     target, _ = target
     fake.set(run={"generating": 30})
