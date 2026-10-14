@@ -49,12 +49,13 @@ from bakobo.errors import BakoboError, ErrorCode  # type: ignore[import-untyped]
 from .mutate import SINKS_MALFORMED, declared_sinks  # the same reading of the same table
 from .shared import (
     DECLARED,
+    DIAGNOSTIC,
     SCHEMA,
     STRING_ONLY,
     UnreadableReportError,
-    classify,
     known_sink,
     read_report,
+    survivor_class,
 )
 
 TAG = "mutation-survivor"
@@ -235,19 +236,39 @@ def vouched(sink: str | None, sinks: tuple[str, ...]) -> str | None:
     return sink
 
 
-def file_ticks(data: dict, tick: str, dry_run: bool,
-               sinks: tuple[str, ...] = ()) -> tuple[list[str], int, int, int]:
-    """Returns (ids filed, count already ticked, count re-noted, count string-only)."""
+class Sources:
+    """Source files at the report's commit, read from the target's git, each once.
+
+    A file git cannot produce is None, and a survivor in it can never be called diagnostic.
+    """
+
+    def __init__(self, root: Path, commit: str, git: str = "git"):
+        self.root, self.commit, self.git = root, commit, git
+        self.cache: dict[str, str | None] = {}
+
+    def get(self, path: str) -> str | None:
+        if path not in self.cache:
+            proc = subprocess.run([self.git, "-C", str(self.root), "show",
+                                   f"{self.commit}:{path}"], capture_output=True, text=True)
+            self.cache[path] = proc.stdout if proc.returncode == 0 else None
+        return self.cache[path]
+
+
+def file_ticks(data: dict, tick: str, dry_run: bool, sinks: tuple[str, ...] = (),
+               sources: Sources | None = None) -> tuple[list[str], int, int, dict[str, int]]:
+    """Returns (ids filed, count already ticked, count re-noted, counts by uncounted class)."""
     have = ticked(tick)
     done: set[str] = set()
     filed: list[str] = []
-    skipped = renoted = strings = 0
+    skipped = renoted = 0
+    quiet = {STRING_ONLY: 0, DIAGNOSTIC: 0}
     for s in data["survivors"]:
         mutation = s["mutation"]
-        kind = classify(mutation["removed"], mutation["added"],
-                        vouched(s.get("message_sink"), sinks))
-        if kind == STRING_ONLY:
-            strings += 1
+        source = sources.get(s["file"]) if sources else None
+        kind = survivor_class(source, s["line"], mutation["removed"], mutation["added"],
+                              vouched(s.get("message_sink"), sinks))
+        if kind in quiet:
+            quiet[kind] += 1
             continue
         if s["id"] in done:
             skipped += 1
@@ -273,7 +294,7 @@ def file_ticks(data: dict, tick: str, dry_run: bool,
             run([tick, "note", tick_id, detail(s, data)])
             print(f"filed {tick_id}: {title(s)}")
         filed.append(s["id"])
-    return filed, skipped, renoted, strings
+    return filed, skipped, renoted, quiet
 
 
 def load(args: argparse.Namespace) -> dict:
@@ -316,12 +337,15 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     except BakoboError as error:
         print(f"{error.code}: {error.detail}\nHint: {error.hint}", file=sys.stderr)
         return 2 if error.code in (MALFORMED.code, SINKS_MALFORMED.code) else 1
-    filed, skipped, renoted, strings = file_ticks(data, args.tick, args.dry_run, sinks)
+    sources = Sources(args.root, data["commit"])
+    filed, skipped, renoted, quiet = file_ticks(data, args.tick, args.dry_run, sinks, sources)
     verb = "would file" if args.dry_run else "filed"
-    print(f"{verb} {len(filed)}; {skipped} already ticked; {renoted} re-noted; {strings} "
-          f"string-only survivors not ticked; {len(data['survivors'])} survivors in the report")
+    print(f"{verb} {len(filed)}; {skipped} already ticked; {renoted} re-noted; "
+          f"{quiet[STRING_ONLY]} string-only and {quiet[DIAGNOSTIC]} diagnostic survivors not "
+          f"ticked; {len(data['survivors'])} survivors in the report")
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
+

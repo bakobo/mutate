@@ -24,8 +24,10 @@ the run could not be carried out or was refused, because a harness failure that 
 success would look exactly like a clean run.
 
 Each record's ``class`` is ``string-only`` when the mutation changes nothing but the text inside
-string literals that are message text, which is counted rather than ticked,
-and ``behavioural`` otherwise. A literal is message text only when ``message_sink`` traces it,
+string literals that are message text; ``diagnostic`` when it lies wholly inside the arguments
+of the exception a ``raise`` constructs, or that raise's ``from`` cause (``shared.diagnostic``),
+so the refusal stands and only what it says changes; and ``behavioural`` otherwise. The first
+two are counted rather than ticked. A literal is message text only when ``message_sink`` traces it,
 in the source, into an exception constructor in a ``raise``, a ``print``, a logging call,
 ``warnings.warn``, or a sink the repo declares as ``[tool.mutation] message_sinks`` in
 pyproject.toml (see ``shared.message_sinks``); the record carries that sink as
@@ -63,17 +65,20 @@ from bakobo.errors import BakoboError, ErrorCode  # type: ignore[import-untyped]
 from . import checkout, lock, meta, scope
 from .shared import (
     BEHAVIOURAL,
+    DIAGNOSTIC,
     SCHEMA,
     STRING_ONLY,
     SinkConfigError,
-    classify,
     message_sink,
     message_sinks,
     read_pyproject,
+    survivor_class,
 )
 
 PASSED = "passed: every test covering this function passed with the mutant in place"
 STRING_NOTE = "only the text of a message literal changed; counted, not ticked"
+DIAGNOSTIC_NOTE = ("only what a raised exception is given changed, not whether it is raised; "
+                   "counted, not ticked")
 NOTHING_NEEDED = ("Nothing needed running: every mutant in scope already has a verdict, and "
                   "no survivor is to be re-checked.")
 INTERRUPTED_NOTE = ("The run was interrupted. Mutants still marked 'not checked' were never "
@@ -112,8 +117,8 @@ SINKS_MALFORMED = ErrorCode(
     args=("problem",),
     hint=(
         "Fix [tool.mutation] message_sinks in pyproject.toml: each entry is a callable's name, "
-        "Name, or that name and one keyword argument, Name.kwarg. Running again before then "
-        "will fail the same way."
+        "Name; that name and one keyword argument, Name.kwarg; or a dotted callee followed by "
+        "(), such as console.out.write(). Running again before then will fail the same way."
     ),
 )
 # mutmut mangles a method name with U+01C1 (LATIN LETTER LATERAL CLICK) as its separator:
@@ -346,7 +351,7 @@ def survivor(mutmut: str, root: Path, name: str, path: str,
         mutmut_name=name, file=path, line=line,
         function=function, removed=removed, added=added, diff=diff,
         tests=len([t for t in tests.splitlines() if t.strip()]),
-        kind=classify(removed, added, sink), sink=sink,
+        kind=survivor_class(source, line, removed, added, sink), sink=sink,
     )
 
 
@@ -420,7 +425,7 @@ def report(outcome: Outcome, cfg: dict, commit: str, since: str) -> dict:
         "note": outcome.note,
         "counts": outcome.counts,
         "classes": {kind: sum(s.kind == kind for s in outcome.survivors)
-                    for kind in (BEHAVIOURAL, STRING_ONLY)},
+                    for kind in (BEHAVIOURAL, STRING_ONLY, DIAGNOSTIC)},
         "survivors": [s.record(cfg.get("pytest_add_cli_args", [])) for s in outcome.survivors],
     }
 
@@ -447,8 +452,9 @@ def summary(data: dict) -> str:
     survivors = data["survivors"]
     if survivors:
         classes = data["classes"]
-        split = (f"{classes[BEHAVIOURAL]} behavioural, {classes[STRING_ONLY]} string-only "
-                 f"({STRING_NOTE}).")
+        split = (f"{classes[BEHAVIOURAL]} behavioural, {classes[STRING_ONLY]} string-only, "
+                 f"{classes[DIAGNOSTIC]} diagnostic. String-only: {STRING_NOTE}. Diagnostic: "
+                 f"{DIAGNOSTIC_NOTE}.")
         lines += [f"## {len(survivors)} surviving mutants", "", split, "",
                   "| id | class | where | function | mutation |", "|---|---|---|---|---|"]
         for s in survivors:

@@ -261,8 +261,8 @@ def test_ticks_files_only_new_survivors(sample, tmp_path, capsys):
     assert len(notes) == 2 and notes[0][1] == "4ghi"
     assert "commit c0ffee" in notes[0][2] and "-a\n+b" in notes[0][2]
     assert "Test command: pytest -n0 --no-cov" in notes[0][2]
-    assert ("filed 2; 2 already ticked; 0 re-noted; 0 string-only survivors not ticked; "
-            "4 survivors" in capsys.readouterr().out)
+    assert ("filed 2; 2 already ticked; 0 re-noted; 0 string-only and 0 diagnostic survivors "
+            "not ticked; 4 survivors" in capsys.readouterr().out)
 
 
 def test_ticks_dry_run_files_nothing(sample, tmp_path, capsys):
@@ -344,7 +344,7 @@ REAL = json.loads((Path(__file__).resolve().parent
     (['f("a",', '  "b")'], ['f("a",', '  "XXbXX")']),
 ])
 def test_a_change_inside_a_message_literal_is_string_only(removed, added):
-    assert mutate.classify(removed, added, "raise ValueError") == STRING_ONLY
+    assert shared.classify(removed, added, "raise ValueError") == STRING_ONLY
 
 
 @pytest.mark.parametrize("removed, added", [
@@ -352,7 +352,7 @@ def test_a_change_inside_a_message_literal_is_string_only(removed, added):
     (['    return "allow"'], ['    return "XXallowXX"']),
 ])
 def test_a_string_change_outside_a_message_sink_is_behavioural(removed, added):
-    assert mutate.classify(removed, added, None) == BEHAVIOURAL
+    assert shared.classify(removed, added, None) == BEHAVIOURAL
 
 
 @pytest.mark.parametrize("removed, added", [
@@ -371,7 +371,7 @@ def test_a_string_change_outside_a_message_sink_is_behavioural(removed, added):
     (['y = 1', 'z = "a"'], ['y = 1']),
 ])
 def test_anything_else_is_behavioural(removed, added):
-    assert mutate.classify(removed, added, "raise ValueError") == BEHAVIOURAL
+    assert shared.classify(removed, added, "raise ValueError") == BEHAVIOURAL
 
 
 
@@ -380,7 +380,7 @@ def test_the_real_utina_survivors_split_under_its_declared_sinks():
     # Every one changes text handed to Refusal(...). utina declares Refusal's missing and
     # detail as message sinks, so 54 are string-only. Three change a literal or a slice inside
     # an f-string's {...} (', '.join, [:16] to [:17]), which is code, and stay behavioural.
-    classes = {s["id"]: mutate.classify(s["removed"], s["added"], s["message_sink"])
+    classes = {s["id"]: shared.classify(s["removed"], s["added"], s["message_sink"])
                for s in REAL["utina"]}
     assert len(classes) == 57
     assert sorted(i for i, c in classes.items() if c == BEHAVIOURAL) == [
@@ -401,6 +401,14 @@ def test_the_report_carries_each_survivors_class(repo, tmp_path):
     assert data["classes"][BEHAVIOURAL] == 1 and data["classes"][STRING_ONLY] == 1
     assert "1 behavioural, 1 string-only" in text
     assert "| string-only |" in text and "| behavioural |" in text
+
+
+def test_a_survivor_inside_a_raises_arguments_is_diagnostic(repo, tmp_path):
+    # DIFF_SAIDIFY turns raise ValueError("no label") into raise ValueError(None).
+    mutmut = stub(tmp_path / "bin", "mutmut", show_spec())
+    saidify, opened = survivors_of(repo, mutmut, [NAME_SAIDIFY, NAME_OPEN])
+    assert saidify.kind == shared.DIAGNOSTIC and saidify.record([])["class"] == "diagnostic"
+    assert opened.kind == BEHAVIOURAL
 
 
 def test_a_report_without_survivors_has_empty_classes():
@@ -434,7 +442,7 @@ def test_ticks_files_utinas_behavioural_survivors(tmp_path, capsys):
     adds = [c[-1] for c in calls(tmp_path / "tickbin") if c[0] == "add"]
     assert sorted(a.split()[2] for a in adds) == [
         "[m:3844d16a640a]", "[m:e594c88ec0cc]", "[m:eb3b234984ca]"]
-    assert "filed 3; 0 already ticked; 0 re-noted; 54 string-only survivors not ticked" in (
+    assert "filed 3; 0 already ticked; 0 re-noted; 54 string-only and 0 diagnostic survivors" in (
         capsys.readouterr().out)
 
 
@@ -555,7 +563,7 @@ def bad(record):
     (bad("a string"), "survivor 1"),
     ({"commit": "c0ffee", "failure": None, "survivors": {}}, "the report"),
     ({"failure": None, "survivors": []}, "the report"),
-    ({"schema": "bakobo.mutation-report/2", "commit": "c0ffee", "failure": None,
+    ({"schema": "bakobo.mutation-report/1", "commit": "c0ffee", "failure": None,
       "survivors": []}, "the report's schema"),
     ({"schema": mutate.SCHEMA, "failure": None, "survivors": []}, "names no commit"),
     ({"schema": mutate.SCHEMA, "commit": "c0ffee", "failure": None, "survivors": {}},
@@ -579,7 +587,7 @@ def test_a_malformed_report_is_refused_with_a_code(tmp_path, capsys, report_data
 def test_a_string_assigned_to_a_name_is_behavioural():
     source = 'def f(observed):\n    outcome = "kept"\n    return outcome\n'
     assert mutate.message_sink(source, 2, 2) is None
-    assert mutate.classify(['    outcome = "kept"'], ['    outcome = "XXkeptXX"'],
+    assert shared.classify(['    outcome = "kept"'], ['    outcome = "XXkeptXX"'],
                            mutate.message_sink(source, 2, 2)) == BEHAVIOURAL
 
 
@@ -856,7 +864,7 @@ def test_ticks_honours_a_sink_this_repo_declares(tmp_path, capsys):
     path = declared_report(tmp_path, "declared Refusal.missing")
     assert ticks.main(["--report", str(path), "--tick", str(tick), "--root", str(root)]) == 0
     assert [c[0] for c in calls(tmp_path / "tickbin")] == ["ls"]
-    assert "1 string-only survivors not ticked" in capsys.readouterr().out
+    assert "1 string-only and 0 diagnostic survivors not ticked" in capsys.readouterr().out
 
 
 def test_ticks_files_a_survivor_whose_sink_is_no_longer_declared(tmp_path):
@@ -902,11 +910,11 @@ def test_ticks_finds_the_repo_root_by_default():
 ])
 def test_emptying_or_filling_a_literal_is_behavioural(removed, added):
     # Validators refuse empty text, so whether a literal is empty is behaviour (utina#15 1).
-    assert mutate.classify(removed, added, "declared Refusal.missing") == BEHAVIOURAL
+    assert shared.classify(removed, added, "declared Refusal.missing") == BEHAVIOURAL
 
 
 def test_a_raw_literal_changing_case_is_still_string_only():
-    assert mutate.classify(['    raise E(r"a rule")'], ['    raise E(r"A RULE")'],
+    assert shared.classify(['    raise E(r"a rule")'], ['    raise E(r"A RULE")'],
                            "raise E") == STRING_ONLY
 
 
@@ -941,11 +949,11 @@ def test_a_format_string_with_placeholders_is_not_message_text(line, sink):
 ])
 def test_a_literal_inside_an_fstring_expression_is_behavioural(removed, added):
     # The replacement field is code; a literal there is an argument, not text.
-    assert mutate.classify(removed, added, "raise E") == BEHAVIOURAL
+    assert shared.classify(removed, added, "raise E") == BEHAVIOURAL
 
 
 def test_fstring_text_around_an_expression_is_still_string_only():
-    assert mutate.classify(['    raise E(f"a {f(\'b\')} c")'],
+    assert shared.classify(['    raise E(f"a {f(\'b\')} c")'],
                            ['    raise E(f"A {f(\'b\')} C")'],
                            "raise E") == STRING_ONLY
 
@@ -1006,7 +1014,7 @@ def test_every_malformed_config_is_a_coded_refusal(tmp_path, capsys, body, probl
 
 
 def test_a_literal_python_cannot_evaluate_is_behavioural():
-    assert mutate.classify(['    raise E("\\N{NO SUCH NAME} a")'],
+    assert shared.classify(['    raise E("\\N{NO SUCH NAME} a")'],
                            ['    raise E("\\N{NO SUCH NAME} b")'], "raise E") == BEHAVIOURAL
 
 

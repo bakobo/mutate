@@ -15,7 +15,7 @@ import tokenize
 import tomllib
 from pathlib import Path
 
-SCHEMA = "bakobo.mutation-report/1"
+SCHEMA = "bakobo.mutation-report/2"
 # The most a report may hold before it is refused unread: 16 MiB. A report is one record
 # per surviving mutant, around a kilobyte each, so this allows thousands of survivors while
 # keeping a corrupt or hostile artifact from being loaded whole.
@@ -23,6 +23,7 @@ MAX_REPORT_BYTES = 16 * 1024 * 1024
 
 BEHAVIOURAL = "behavioural"
 STRING_ONLY = "string-only"
+DIAGNOSTIC = "diagnostic"
 # Tokens whose text is a string literal's content.
 STRING_TOKENS = {tokenize.STRING, tokenize.FSTRING_MIDDLE, tokenize.TSTRING_MIDDLE}
 # Tokens that carry no meaning a mutation could change.
@@ -42,23 +43,36 @@ OPEN_BRACKET = "unexpected EOF in multi-line statement"
 
 # A repo may declare more message sinks than the built-in ones, in pyproject.toml:
 #     [tool.mutation]
-#     message_sinks = ["Refusal.missing", "Note"]
+#     message_sinks = ["Refusal.missing", "Note", "console.out.write()"]
 # ``Name`` makes every string argument of a call spelled exactly ``Name(...)`` message text;
-# ``Name.kwarg`` makes only that keyword argument so. A survivor whose literal reached one is
-# recorded with the sink ``declared <entry>``.
+# ``Name.kwarg`` makes only that keyword argument so; and ``a.b.c()``, a dotted callee of any
+# length followed by ``()``, makes every string argument of a call spelled exactly
+# ``a.b.c(...)`` message text. A survivor whose literal reached one is recorded with the sink
+# ``declared <entry>``.
 # pyproject.toml is read at most this far, 1 MiB, and refused unread beyond it.
 MAX_PYPROJECT_BYTES = 1024 * 1024
 DECLARED = "declared "
 DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 
 
+CALLEE = "()"
+
+
+def _name(part: str) -> bool:
+    return part.isidentifier() and not keyword.iskeyword(part)
+
+
 def sink_entry(entry: object) -> bool:
-    """Whether ``entry`` is Name or Name.kwarg: one or two identifiers, neither a keyword."""
+    """Whether ``entry`` is Name, Name.kwarg, or a dotted callee followed by ``()``.
+
+    Every dotted part must be an identifier and not a keyword.
+    """
     if not isinstance(entry, str):
         return False
+    if entry.endswith(CALLEE):
+        return all(_name(part) for part in entry.removesuffix(CALLEE).split("."))
     parts = entry.split(".")
-    return len(parts) <= 2 and all(
-        part.isidentifier() and not keyword.iskeyword(part) for part in parts)
+    return len(parts) <= 2 and all(_name(part) for part in parts)
 
 
 class SinkConfigError(Exception):
@@ -79,8 +93,8 @@ def message_sinks(pyproject: dict) -> tuple[str, ...]:
     for entry in sinks:
         if not sink_entry(entry):
             raise SinkConfigError(
-                f"[tool.mutation] message_sinks holds {entry!r}, which is neither Name nor "
-                "Name.kwarg")
+                f"[tool.mutation] message_sinks holds {entry!r}, which is not Name, "
+                "Name.kwarg or a dotted.callee()")
     return tuple(sinks)
 
 
@@ -242,6 +256,10 @@ def _sink_of_call(call: ast.Call, parent: ast.AST | None, kwarg: str | None,
             return f"{owner}.{method}"
     callee = ast.unparse(func)
     for sink in sinks:
+        if sink.endswith(CALLEE):
+            if callee == sink.removesuffix(CALLEE):
+                return DECLARED + sink
+            continue
         name, _, keyword = sink.partition(".")
         if callee == name and (not keyword or keyword == kwarg):
             return DECLARED + sink
@@ -314,3 +332,67 @@ def message_sink(source: str, first: int, last: int,
     if not found or None in found or len(set(found)) > 1:
         return None  # a literal that is no message, or two sinks, neither vouching for both
     return found[0]
+
+
+
+class _MaskRaiseArguments(ast.NodeTransformer):
+    """Blank what a raise's constructed exception is given, and its from-cause.
+
+    The callee stays, and so does whether there is a cause, so a mutation that changes which
+    exception is raised, or drops the cause, still shows up as a difference.
+    """
+
+    def visit_Raise(self, node: ast.Raise) -> ast.Raise:
+        if isinstance(node.exc, ast.Call):
+            node.exc.args, node.exc.keywords = [], []
+        if node.cause is not None:
+            node.cause = ast.Constant(value=...)
+        return node
+
+
+def _masked(tree: ast.AST) -> str:
+    return ast.dump(_MaskRaiseArguments().visit(tree))
+
+
+def _indent(line: str) -> str:
+    return line[:len(line) - len(line.lstrip())]
+
+
+def diagnostic(source: str, line: int, removed: list[str], added: list[str]) -> bool:
+    """Whether the mutation lies wholly inside the arguments of a raise's exception, or its cause.
+
+    The mutation is applied to the source (mutmut's diff of a method is dedented, so the file's
+    own indentation is restored), both versions are parsed, and they must differ and become
+    identical once every raise's constructor arguments and from-cause are blanked. Anything
+    that cannot be checked that way, a fragment that is not the source, a mutant that does not
+    parse, a mutation that removes nothing, is not vouched for.
+    """
+    lines = source.splitlines()
+    end = line - 1 + len(removed)
+    if not removed or line < 1 or end > len(lines):
+        return False
+    original = lines[line - 1:end]
+    if [text.strip() for text in original] != [text.strip() for text in removed]:
+        return False
+    file_ws, diff_ws = _indent(original[0]), _indent(removed[0])
+    if not file_ws.endswith(diff_ws):
+        return False
+    pad = file_ws[:len(file_ws) - len(diff_ws)]
+    mutated = lines[:line - 1] + [pad + text for text in added] + lines[end:]
+    try:
+        before, after = ast.parse(source), ast.parse("\n".join(mutated))
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    if ast.dump(before) == ast.dump(after):
+        return False
+    return _masked(before) == _masked(after)
+
+
+def survivor_class(source: str | None, line: int, removed: list[str], added: list[str],
+                   sink: str | None) -> str:
+    """string-only, else diagnostic, else behavioural; without the source, never diagnostic."""
+    if classify(removed, added, sink) == STRING_ONLY:
+        return STRING_ONLY
+    if source is not None and diagnostic(source, line, removed, added):
+        return DIAGNOSTIC
+    return BEHAVIOURAL
