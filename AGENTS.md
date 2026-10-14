@@ -1,6 +1,6 @@
 ## What this repo is
 
-`bakobo-mutate` mutation-tests the source modules a repo's default branch changed recently, using that repo's own mutmut, and files a `tick` per surviving mutant. It is installed on a developer's machine with `uv tool install`, never as a dependency of the repo it tests, so mutmut is not one of its dependencies either. The package is `src/bakobo_mutate/`: `mutate.py` is `bakobo-mutate run`, `ticks.py` is `bakobo-mutate ticks`, `shared.py` holds what both read, and `cli.py` dispatches between them. See `README.md` for how a repo enrols.
+`bakobo-mutate` mutation-tests what has landed on a repo's default branch, on demand on a developer's machine, re-testing only what changed since the last run, using that repo's own mutmut; it files a `tick` per surviving mutant, and a weekly sweep files one `mutation-stale` tick per repo whose results have gone stale. It is installed with `uv tool install`, never as a dependency of the repo it tests, so mutmut is not one of its dependencies either. The package is `src/bakobo_mutate/`: `mutate.py` is `bakobo-mutate run`, built on `lock.py` (one run per machine), `checkout.py` (the persistent `.worktrees/mutation` checkout), `scope.py` (which modules, and the stamp) and `meta.py` (mutmut's verdicts); `ticks.py` is `bakobo-mutate ticks`; `sweep.py` is `stale`, `enroll`, `unenroll` and `sweep`; `shared.py` holds the survivor classes and the report's schema; and `cli.py` dispatches between them. See `README.md` for how a repo enrols.
 
 <!-- >>> bakobo standards >>> (managed by dev/sync-tier1) -->
 
@@ -87,7 +87,7 @@ later need to know *why*) may skip intent entirely — just delete `this.i.seed`
 
 Strict TDD. For each requirement, write tests that capture the happy path and the edge and unhappy cases, **run them and observe them fail**, then implement until they pass. Never check in without proving the suite passes. Aim for 100% branch coverage of new code, and always leave existing code better tested than you found it.
 
-The test command is `uv run pytest`; coverage is enforced at 100% branch coverage and the run fails below it. mutmut, `gh` and `tick` are stub executables in the tests, and git is the real one over a scratch repository. Never run the tool against a real repository from the test suite.
+The test command is `uv run pytest`; coverage is enforced at 100% branch coverage and the run fails below it. In the unit tests mutmut, uv and `tick` are stub executables, and git is the real one over scratch repositories. The tests marked `integration` drive the real mutmut 3.8.0 on a toy project in a temporary directory; with no network, run them with `UV_OFFLINE=1`. Never run the tool against a real repository from the test suite.
 
 ## CI and Documentation
 

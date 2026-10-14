@@ -25,7 +25,7 @@ Bakobo is a small company. These are commitments about *responsiveness*, not a g
 
 ## Scope
 
-This repository is `bakobo-mutate`, a command-line tool a developer runs against a repository they already trust, on their own machine. Its code is in scope: how it reads `pyproject.toml`, git history, mutmut's output and mutation reports, and what it passes to the `mutmut`, `git`, `gh` and `tick` executables it runs.
+This repository is `bakobo-mutate`, a command-line tool a developer runs against a repository they already trust, on their own machine. Its code is in scope: how it reads `pyproject.toml`, git history, mutmut's output and mutation reports, and what it passes to the `mutmut`, `git`, `uv` and `tick` executables it runs, and the checkout, lock and enrolment files it writes.
 
 Those executables are not ours. A vulnerability in [mutmut](https://github.com/boxed/mutmut), the GitHub CLI or `tick` belongs to that project. So does one in the test suite of the repository being mutated, which `bakobo-mutate run` executes by design.
 
