@@ -1,0 +1,748 @@
+{
+ "source": "the first local run of the mutation tool over utina (a public Bakobo repo), 2026-10-05, over src/utina/fold/semantics.py. message_sink is what mutate.message_sink finds for each survivor's line in the source at that commit, with utina's declared sinks (Refusal.missing, Refusal.detail).",
+ "survivors": {
+  "utina": [
+   {
+    "id": "ef9c3e0beb99",
+    "file": "src/utina/fold/semantics.py",
+    "line": 217,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"the fate of each superseding-recovery rule\""
+    ],
+    "added": [
+     "                \"XXthe fate of each superseding-recovery ruleXX\""
+    ],
+    "message_sink": "declared Refusal.missing"
+   },
+   {
+    "id": "a4b02d431c26",
+    "file": "src/utina/fold/semantics.py",
+    "line": 217,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"the fate of each superseding-recovery rule\""
+    ],
+    "added": [
+     "                \"THE FATE OF EACH SUPERSEDING-RECOVERY RULE\""
+    ],
+    "message_sink": "declared Refusal.missing"
+   },
+   {
+    "id": "64fbb8245a0d",
+    "file": "src/utina/fold/semantics.py",
+    "line": 220,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"Custos requires a Constitution to commit the revision of every external \""
+    ],
+    "added": [
+     "                \"XXCustos requires a Constitution to commit the revision of every external XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "b08e12b24ddf",
+    "file": "src/utina/fold/semantics.py",
+    "line": 220,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"Custos requires a Constitution to commit the revision of every external \""
+    ],
+    "added": [
+     "                \"custos requires a constitution to commit the revision of every external \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "e09817a55d61",
+    "file": "src/utina/fold/semantics.py",
+    "line": 220,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"Custos requires a Constitution to commit the revision of every external \""
+    ],
+    "added": [
+     "                \"CUSTOS REQUIRES A CONSTITUTION TO COMMIT THE REVISION OF EVERY EXTERNAL \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "8952f7ca26c7",
+    "file": "src/utina/fold/semantics.py",
+    "line": 221,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"specification its fold consumes, and this law says nothing about KERI. A \""
+    ],
+    "added": [
+     "                \"XXspecification its fold consumes, and this law says nothing about KERI. A XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "1b95e069a72e",
+    "file": "src/utina/fold/semantics.py",
+    "line": 221,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"specification its fold consumes, and this law says nothing about KERI. A \""
+    ],
+    "added": [
+     "                \"specification its fold consumes, and this law says nothing about keri. a \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "8d154f56f9c1",
+    "file": "src/utina/fold/semantics.py",
+    "line": 221,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"specification its fold consumes, and this law says nothing about KERI. A \""
+    ],
+    "added": [
+     "                \"SPECIFICATION ITS FOLD CONSUMES, AND THIS LAW SAYS NOTHING ABOUT KERI. A \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "bb20ce4c3770",
+    "file": "src/utina/fold/semantics.py",
+    "line": 222,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"duplicity observation convicts only under the key tier's committed rules, \""
+    ],
+    "added": [
+     "                \"XXduplicity observation convicts only under the key tier's committed rules, XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "2c4d0c8f859c",
+    "file": "src/utina/fold/semantics.py",
+    "line": 222,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"duplicity observation convicts only under the key tier's committed rules, \""
+    ],
+    "added": [
+     "                \"DUPLICITY OBSERVATION CONVICTS ONLY UNDER THE KEY TIER'S COMMITTED RULES, \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "fb93a7f988ab",
+    "file": "src/utina/fold/semantics.py",
+    "line": 223,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"so without the declaration there is no committed rule for it to convict under.\""
+    ],
+    "added": [
+     "                \"XXso without the declaration there is no committed rule for it to convict under.XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "0e5116e35d20",
+    "file": "src/utina/fold/semantics.py",
+    "line": 223,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"so without the declaration there is no committed rule for it to convict under.\""
+    ],
+    "added": [
+     "                \"SO WITHOUT THE DECLARATION THERE IS NO COMMITTED RULE FOR IT TO CONVICT UNDER.\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "e594c88ec0cc",
+    "file": "src/utina/fold/semantics.py",
+    "line": 230,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                f\"an implementation of the KERI revision this law pins, {declared.spec[:16]}...\""
+    ],
+    "added": [
+     "                f\"an implementation of the KERI revision this law pins, {declared.spec[:17]}...\""
+    ],
+    "message_sink": "declared Refusal.missing"
+   },
+   {
+    "id": "ab3f3365fb4f",
+    "file": "src/utina/fold/semantics.py",
+    "line": 233,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"The law pins a revision of the KERI specification this engine does not carry, \""
+    ],
+    "added": [
+     "                \"XXThe law pins a revision of the KERI specification this engine does not carry, XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "d66ea4445fc6",
+    "file": "src/utina/fold/semantics.py",
+    "line": 233,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"The law pins a revision of the KERI specification this engine does not carry, \""
+    ],
+    "added": [
+     "                \"the law pins a revision of the keri specification this engine does not carry, \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "83102065ad4b",
+    "file": "src/utina/fold/semantics.py",
+    "line": 233,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"The law pins a revision of the KERI specification this engine does not carry, \""
+    ],
+    "added": [
+     "                \"THE LAW PINS A REVISION OF THE KERI SPECIFICATION THIS ENGINE DOES NOT CARRY, \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "b89e5b6a7009",
+    "file": "src/utina/fold/semantics.py",
+    "line": 234,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"so the recovery rules it names are rules this fold has not read.\""
+    ],
+    "added": [
+     "                \"XXso the recovery rules it names are rules this fold has not read.XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "722daac0e308",
+    "file": "src/utina/fold/semantics.py",
+    "line": 234,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"so the recovery rules it names are rules this fold has not read.\""
+    ],
+    "added": [
+     "                \"SO THE RECOVERY RULES IT NAMES ARE RULES THIS FOLD HAS NOT READ.\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "eb3b234984ca",
+    "file": "src/utina/fold/semantics.py",
+    "line": 242,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "            missing=f\"a disposition for superseding-recovery rules {', '.join(silent)}\","
+    ],
+    "added": [
+     "            missing=f\"a disposition for superseding-recovery rules {'XX, XX'.join(silent)}\","
+    ],
+    "message_sink": "declared Refusal.missing"
+   },
+   {
+    "id": "58bb82ee19f9",
+    "file": "src/utina/fold/semantics.py",
+    "line": 244,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"Each rule the fold's semantics depend on is to be consumed or expressly \""
+    ],
+    "added": [
+     "                \"XXEach rule the fold's semantics depend on is to be consumed or expressly XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "24219820d758",
+    "file": "src/utina/fold/semantics.py",
+    "line": 244,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"Each rule the fold's semantics depend on is to be consumed or expressly \""
+    ],
+    "added": [
+     "                \"each rule the fold's semantics depend on is to be consumed or expressly \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "f2e35e3cdd88",
+    "file": "src/utina/fold/semantics.py",
+    "line": 244,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"Each rule the fold's semantics depend on is to be consumed or expressly \""
+    ],
+    "added": [
+     "                \"EACH RULE THE FOLD'S SEMANTICS DEPEND ON IS TO BE CONSUMED OR EXPRESSLY \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "1a8e340b98e9",
+    "file": "src/utina/fold/semantics.py",
+    "line": 245,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"excluded, never passed over in silence, and this law is silent on some.\""
+    ],
+    "added": [
+     "                \"XXexcluded, never passed over in silence, and this law is silent on some.XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "4b62c9ca51c4",
+    "file": "src/utina/fold/semantics.py",
+    "line": 245,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"excluded, never passed over in silence, and this law is silent on some.\""
+    ],
+    "added": [
+     "                \"EXCLUDED, NEVER PASSED OVER IN SILENCE, AND THIS LAW IS SILENT ON SOME.\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "fea7e0a5dec0",
+    "file": "src/utina/fold/semantics.py",
+    "line": 251,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "            missing=\"an implementation of the recovery dispositions this law declares\","
+    ],
+    "added": [
+     "            missing=\"XXan implementation of the recovery dispositions this law declaresXX\","
+    ],
+    "message_sink": "declared Refusal.missing"
+   },
+   {
+    "id": "80e12c218c4e",
+    "file": "src/utina/fold/semantics.py",
+    "line": 253,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"This engine consumes every superseding-recovery rule and implements no other \""
+    ],
+    "added": [
+     "                \"XXThis engine consumes every superseding-recovery rule and implements no other XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "32824d7c5e76",
+    "file": "src/utina/fold/semantics.py",
+    "line": 253,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"This engine consumes every superseding-recovery rule and implements no other \""
+    ],
+    "added": [
+     "                \"this engine consumes every superseding-recovery rule and implements no other \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "19bac856b5ce",
+    "file": "src/utina/fold/semantics.py",
+    "line": 253,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"This engine consumes every superseding-recovery rule and implements no other \""
+    ],
+    "added": [
+     "                \"THIS ENGINE CONSUMES EVERY SUPERSEDING-RECOVERY RULE AND IMPLEMENTS NO OTHER \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "7bcef5a4510b",
+    "file": "src/utina/fold/semantics.py",
+    "line": 254,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"declaration. Answering under an exclusion it cannot honour would be assuming \""
+    ],
+    "added": [
+     "                \"XXdeclaration. Answering under an exclusion it cannot honour would be assuming XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "c8b7bcebb451",
+    "file": "src/utina/fold/semantics.py",
+    "line": 254,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"declaration. Answering under an exclusion it cannot honour would be assuming \""
+    ],
+    "added": [
+     "                \"declaration. answering under an exclusion it cannot honour would be assuming \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "0f0ca6af147f",
+    "file": "src/utina/fold/semantics.py",
+    "line": 254,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"declaration. Answering under an exclusion it cannot honour would be assuming \""
+    ],
+    "added": [
+     "                \"DECLARATION. ANSWERING UNDER AN EXCLUSION IT CANNOT HONOUR WOULD BE ASSUMING \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "c458a671351f",
+    "file": "src/utina/fold/semantics.py",
+    "line": 255,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"at exactly the moment axiom 4 forbids it.\""
+    ],
+    "added": [
+     "                \"XXat exactly the moment axiom 4 forbids it.XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "85f7425022af",
+    "file": "src/utina/fold/semantics.py",
+    "line": 255,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"at exactly the moment axiom 4 forbids it.\""
+    ],
+    "added": [
+     "                \"AT EXACTLY THE MOMENT AXIOM 4 FORBIDS IT.\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "75a758e5b29a",
+    "file": "src/utina/fold/semantics.py",
+    "line": 216,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"a functional-dependency declaration naming KERI's revision by digest and \""
+    ],
+    "added": [
+     "                \"XXa functional-dependency declaration naming KERI's revision by digest and XX\""
+    ],
+    "message_sink": "declared Refusal.missing"
+   },
+   {
+    "id": "1fed0bd8e334",
+    "file": "src/utina/fold/semantics.py",
+    "line": 216,
+    "function": "dependency_refusal_for",
+    "removed": [
+     "                \"a functional-dependency declaration naming KERI's revision by digest and \""
+    ],
+    "added": [
+     "                \"a functional-dependency declaration naming keri's revision by digest and \""
+    ],
+    "message_sink": "declared Refusal.missing"
+   },
+   {
+    "id": "6216f65e508c",
+    "file": "src/utina/fold/semantics.py",
+    "line": 110,
+    "function": "refusal_for",
+    "removed": [
+     "                \"This law's composition rule is expressed in an external semantics and the \""
+    ],
+    "added": [
+     "                \"XXThis law's composition rule is expressed in an external semantics and the XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "5b2669a4c797",
+    "file": "src/utina/fold/semantics.py",
+    "line": 110,
+    "function": "refusal_for",
+    "removed": [
+     "                \"This law's composition rule is expressed in an external semantics and the \""
+    ],
+    "added": [
+     "                \"this law's composition rule is expressed in an external semantics and the \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "0cf4f388f834",
+    "file": "src/utina/fold/semantics.py",
+    "line": 110,
+    "function": "refusal_for",
+    "removed": [
+     "                \"This law's composition rule is expressed in an external semantics and the \""
+    ],
+    "added": [
+     "                \"THIS LAW'S COMPOSITION RULE IS EXPRESSED IN AN EXTERNAL SEMANTICS AND THE \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "5eb67ea3342e",
+    "file": "src/utina/fold/semantics.py",
+    "line": 111,
+    "function": "refusal_for",
+    "removed": [
+     "                \"law does not say which revision of it the clauses mean. Axiom 4 requires an \""
+    ],
+    "added": [
+     "                \"XXlaw does not say which revision of it the clauses mean. Axiom 4 requires an XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "c5eea18d50f5",
+    "file": "src/utina/fold/semantics.py",
+    "line": 111,
+    "function": "refusal_for",
+    "removed": [
+     "                \"law does not say which revision of it the clauses mean. Axiom 4 requires an \""
+    ],
+    "added": [
+     "                \"law does not say which revision of it the clauses mean. axiom 4 requires an \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "9394cb6ae25d",
+    "file": "src/utina/fold/semantics.py",
+    "line": 111,
+    "function": "refusal_for",
+    "removed": [
+     "                \"law does not say which revision of it the clauses mean. Axiom 4 requires an \""
+    ],
+    "added": [
+     "                \"LAW DOES NOT SAY WHICH REVISION OF IT THE CLAUSES MEAN. AXIOM 4 REQUIRES AN \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "e8238641f351",
+    "file": "src/utina/fold/semantics.py",
+    "line": 112,
+    "function": "refusal_for",
+    "removed": [
+     "                \"external semantics to be pinned by committed digest; a fold that assumed \""
+    ],
+    "added": [
+     "                \"XXexternal semantics to be pinned by committed digest; a fold that assumed XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "9bcd50b27dbb",
+    "file": "src/utina/fold/semantics.py",
+    "line": 112,
+    "function": "refusal_for",
+    "removed": [
+     "                \"external semantics to be pinned by committed digest; a fold that assumed \""
+    ],
+    "added": [
+     "                \"EXTERNAL SEMANTICS TO BE PINNED BY COMMITTED DIGEST; A FOLD THAT ASSUMED \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "fc1f4803c0b8",
+    "file": "src/utina/fold/semantics.py",
+    "line": 113,
+    "function": "refusal_for",
+    "removed": [
+     "                \"its own revision would answer under a lens nobody committed.\""
+    ],
+    "added": [
+     "                \"XXits own revision would answer under a lens nobody committed.XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "0ba42ef26565",
+    "file": "src/utina/fold/semantics.py",
+    "line": 113,
+    "function": "refusal_for",
+    "removed": [
+     "                \"its own revision would answer under a lens nobody committed.\""
+    ],
+    "added": [
+     "                \"ITS OWN REVISION WOULD ANSWER UNDER A LENS NOBODY COMMITTED.\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "3844d16a640a",
+    "file": "src/utina/fold/semantics.py",
+    "line": 119,
+    "function": "refusal_for",
+    "removed": [
+     "            missing=f\"an implementation of the semantics this law pins, {pinned[:16]}...\","
+    ],
+    "added": [
+     "            missing=f\"an implementation of the semantics this law pins, {pinned[:17]}...\","
+    ],
+    "message_sink": "declared Refusal.missing"
+   },
+   {
+    "id": "919d8e147d91",
+    "file": "src/utina/fold/semantics.py",
+    "line": 121,
+    "function": "refusal_for",
+    "removed": [
+     "                \"The law pins a revision of the dossier specification this engine does not \""
+    ],
+    "added": [
+     "                \"XXThe law pins a revision of the dossier specification this engine does not XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "6f28a8d36dd9",
+    "file": "src/utina/fold/semantics.py",
+    "line": 121,
+    "function": "refusal_for",
+    "removed": [
+     "                \"The law pins a revision of the dossier specification this engine does not \""
+    ],
+    "added": [
+     "                \"the law pins a revision of the dossier specification this engine does not \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "0fa6e5896413",
+    "file": "src/utina/fold/semantics.py",
+    "line": 121,
+    "function": "refusal_for",
+    "removed": [
+     "                \"The law pins a revision of the dossier specification this engine does not \""
+    ],
+    "added": [
+     "                \"THE LAW PINS A REVISION OF THE DOSSIER SPECIFICATION THIS ENGINE DOES NOT \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "ee085ff1eb91",
+    "file": "src/utina/fold/semantics.py",
+    "line": 122,
+    "function": "refusal_for",
+    "removed": [
+     "                \"implement, so its clauses are expressed in terms this fold cannot read. \""
+    ],
+    "added": [
+     "                \"XXimplement, so its clauses are expressed in terms this fold cannot read. XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "9afcb3069b79",
+    "file": "src/utina/fold/semantics.py",
+    "line": 122,
+    "function": "refusal_for",
+    "removed": [
+     "                \"implement, so its clauses are expressed in terms this fold cannot read. \""
+    ],
+    "added": [
+     "                \"IMPLEMENT, SO ITS CLAUSES ARE EXPRESSED IN TERMS THIS FOLD CANNOT READ. \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "5a22e0bb988c",
+    "file": "src/utina/fold/semantics.py",
+    "line": 123,
+    "function": "refusal_for",
+    "removed": [
+     "                \"That is a refusal and not a finding: the evidence is not short, the lens \""
+    ],
+    "added": [
+     "                \"XXThat is a refusal and not a finding: the evidence is not short, the lens XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "cdbaeeb55b16",
+    "file": "src/utina/fold/semantics.py",
+    "line": 123,
+    "function": "refusal_for",
+    "removed": [
+     "                \"That is a refusal and not a finding: the evidence is not short, the lens \""
+    ],
+    "added": [
+     "                \"that is a refusal and not a finding: the evidence is not short, the lens \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "6ba69bcdc5b3",
+    "file": "src/utina/fold/semantics.py",
+    "line": 123,
+    "function": "refusal_for",
+    "removed": [
+     "                \"That is a refusal and not a finding: the evidence is not short, the lens \""
+    ],
+    "added": [
+     "                \"THAT IS A REFUSAL AND NOT A FINDING: THE EVIDENCE IS NOT SHORT, THE LENS \""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "7a6ee23f3621",
+    "file": "src/utina/fold/semantics.py",
+    "line": 124,
+    "function": "refusal_for",
+    "removed": [
+     "                \"is one the fold does not have.\""
+    ],
+    "added": [
+     "                \"XXis one the fold does not have.XX\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "571eafe35c53",
+    "file": "src/utina/fold/semantics.py",
+    "line": 124,
+    "function": "refusal_for",
+    "removed": [
+     "                \"is one the fold does not have.\""
+    ],
+    "added": [
+     "                \"IS ONE THE FOLD DOES NOT HAVE.\""
+    ],
+    "message_sink": "declared Refusal.detail"
+   },
+   {
+    "id": "c9a68e126551",
+    "file": "src/utina/fold/semantics.py",
+    "line": 108,
+    "function": "refusal_for",
+    "removed": [
+     "            missing=\"a semantics declaration naming the dossier specification by digest\","
+    ],
+    "added": [
+     "            missing=\"XXa semantics declaration naming the dossier specification by digestXX\","
+    ],
+    "message_sink": "declared Refusal.missing"
+   }
+  ]
+ }
+}

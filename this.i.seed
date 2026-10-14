@@ -1,0 +1,41 @@
+# <REPO NAME> — Intent Tree (this.i)  [SEED — see below before using]
+#
+# This is a SEED file, not a live this.i. It ships in the Bakobo template so a new repo starts
+# intent-first instead of blank. See docs/methodology.md §2 for the full procedure.
+#
+# TO ADOPT INTENT IN THIS REPO:
+#   1. Copy this file to `this.i`  (cp this.i.seed this.i), then delete this.i.seed.
+#   2. Replace the root goal node below — its Name and its `why` — with THIS repo's real purpose:
+#      the single outcome it exists to produce, written to the rebuttal-surface standard
+#      (methodology.md §4: name a rejected alternative, an accepted tradeoff, or a driving
+#      constraint — enough that a reviewer could say "I disagree because ___").
+#   3. Give it a FRESH id: replace the placeholder with `nid: <id>` where <id> comes from `i id`.
+#      Never type one, never reuse the placeholder, never generate one any other way.
+#   4. From now on, record every consequential decision here (methodology.md §3 trigger) in its
+#      OWN commit, committed BEFORE the code commit it justifies (methodology.md §5).
+#
+# IF THIS REPO DOES NOT WARRANT INTENT (pure content/assets, static site, config-only — a repo
+# where no one will later need to know *why* it was built this way): just delete this.i.seed.
+# Its absence is the explicit signal that this repo opted out. That is a fine state.
+#
+# FORMAT REMINDERS (methodology.md §1 / Appendix):
+#   - Node key line:  Name = [marks...] type:      types: goal | decision | constraint | tension | deviation
+#   - nid: 8 digit-first bech32 characters minted by `i id` / `i add` — NEVER a semantic label,
+#     never typed. IDs survive renames. (A legacy `id:` in an older tree is grandfathered.)
+#   - why: the most important field. Must meet the rebuttal-surface standard.
+#   - Nest specific decisions as `children:` of the goal/constraint whose `why` they cite.
+
+Rename me to this repo's purpose = goal:
+  nid: 0placeholder     # REPLACE with the output of `i id`, e.g. 4wnmd0mg
+  why: >
+    Replace this text with the reason this repository exists: the outcome it produces, the main
+    alternative you rejected, and the tradeoff you accepted. Example shape (from imbu): "imbu is
+    the generic engine that embodies an organization's authority enforcement — chose a generic
+    product over a Bakobo-specific app because the constitution asserts the company is an instance
+    of its product; a Bakobo-specific build would make that unprovable. Tradeoff: more up-front
+    generality than a single-tenant tool needs."
+  # children:
+  #   First real decision goes here = decision:
+  #     nid: <from i id>
+  #     why: >
+  #       Chose X over Y because Z, accepting tradeoff W.

@@ -1,0 +1,21 @@
+# Rendered doc artifacts are derived from the markdown next to them; the
+# markdown is the only tracked source of truth. Render into docs/, never the root.
+# See dev/standards/repo-layout.md, "Rendered doc artifacts".
+docs/**/*.pdf
+docs/**/*.html
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Mutation runs and local working notes
+mutants/
+.ignored/
