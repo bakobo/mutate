@@ -30,7 +30,7 @@ def test_an_unknown_command_is_refused(capsys):
     assert "bogus" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("command, option", [("run", "--budget-minutes"), ("ticks", "--dry-run")])
+@pytest.mark.parametrize("command, option", [("run", "--chunk"), ("ticks", "--dry-run")])
 def test_a_commands_help_is_its_own(command, option, capsys):
     with pytest.raises(SystemExit) as exit_:
         cli.main([command, "--help"])

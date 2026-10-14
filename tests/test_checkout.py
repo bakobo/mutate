@@ -91,13 +91,14 @@ def test_mutants_and_ignored_are_excluded_once(origin):
     checkout.ensure_checkout(target)
     exclude = (target / ".git" / "info" / "exclude").read_text()
     assert exclude.count("mutants/") == 1 and exclude.count(".ignored/") == 1
+    assert exclude.count(".worktrees/") == 1
     git(wt, "check-ignore", "-q", "mutants/src/x.py.meta")
     git(target, "check-ignore", "-q", ".ignored/mutation/report.json")
 
 
 def test_an_exclusion_the_repo_already_has_is_not_repeated(origin):
     _, target, seed = origin
-    push_change(seed, ".gitignore", ".venv/\nmutants/\n.ignored/\n")
+    push_change(seed, ".gitignore", ".venv/\nmutants/\n.ignored/\n.worktrees/\n")
     (target / ".git" / "info" / "exclude").unlink()
     git(target, "pull", "-q")
     checkout.ensure_checkout(target)
@@ -109,7 +110,8 @@ def test_an_exclude_file_without_a_trailing_newline_is_extended_cleanly(origin):
     (target / ".git" / "info" / "exclude").write_text("*.tmp")
     checkout.ensure_checkout(target)
     lines = (target / ".git" / "info" / "exclude").read_text().splitlines()
-    assert lines[0] == "*.tmp" and sorted(lines[1:]) == [".ignored/", "mutants/"]
+    assert lines[0] == "*.tmp"
+    assert sorted(lines[1:]) == [".ignored/", ".worktrees/", "mutants/"]
 
 
 def test_a_missing_info_directory_is_created(origin):

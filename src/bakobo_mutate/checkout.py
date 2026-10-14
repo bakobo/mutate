@@ -2,10 +2,10 @@
 
 Each target keeps ``<target>/.worktrees/mutation``, detached at ``origin/<default>`` and
 refreshed before every run, so the tool measures what has landed rather than anyone's work in
-progress, and mutmut's ``mutants/`` cache persists between runs. ``mutants/`` (in the checkout)
-and ``.ignored/`` (where reports are written in the target) are added to the repo's
-``.git/info/exclude`` when git does not already ignore them, so neither ever shows up as
-something to commit.
+progress, and mutmut's ``mutants/`` cache persists between runs. ``mutants/`` (in the checkout),
+``.ignored/`` (where reports are written in the target) and ``.worktrees/`` (where the
+checkout lives) are added to the repo's ``.git/info/exclude`` when git does not already ignore
+them, so none ever shows up as something to commit.
 
 The checkout is synced with ``uv sync --frozen --all-extras`` and runs its own mutmut, from
 its own ``.venv``, so two targets on different mutmut versions never fight (this.i 4xz5c93n).
@@ -150,6 +150,7 @@ def ensure_checkout(target: Path, git: str = "git") -> tuple[Path, str]:
     fetch(target, git)
     branch = default_branch(target, git)
     ensure_ignored(target, ".ignored/mutation/report.json", ".ignored/", git)
+    ensure_ignored(target, ".worktrees/mutation/README", ".worktrees/", git)
     upstream = f"origin/{branch}"
     if not wt.exists():
         _must(target, "worktree", "add", "--quiet", "--detach", str(wt), upstream, git=git)
