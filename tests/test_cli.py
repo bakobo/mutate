@@ -12,8 +12,9 @@ def test_help_lists_both_commands(capsys):
         cli.main(["--help"])
     assert exit_.value.code == 0
     out = capsys.readouterr().out
-    assert "run" in out and "ticks" in out
-    assert "mutation-test the changed modules" in out
+    for command in ("run", "ticks", "stale", "enroll", "unenroll", "sweep"):
+        assert command in out
+    assert "mutation-test what landed" in out
 
 
 def test_a_command_is_required(capsys):
@@ -30,7 +31,10 @@ def test_an_unknown_command_is_refused(capsys):
     assert "bogus" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("command, option", [("run", "--chunk"), ("ticks", "--dry-run")])
+@pytest.mark.parametrize("command, option", [
+    ("run", "--chunk"), ("ticks", "--dry-run"), ("stale", "--fetch"), ("enroll", "target"),
+    ("unenroll", "target"), ("sweep", "--tick"),
+])
 def test_a_commands_help_is_its_own(command, option, capsys):
     with pytest.raises(SystemExit) as exit_:
         cli.main([command, "--help"])
@@ -40,7 +44,7 @@ def test_a_commands_help_is_its_own(command, option, capsys):
     assert option in out
 
 
-@pytest.mark.parametrize("command", ["run", "ticks"])
+@pytest.mark.parametrize("command", ["run", "ticks", "stale", "enroll", "unenroll", "sweep"])
 def test_the_rest_of_argv_is_passed_through(command, monkeypatch):
     seen = {}
 
