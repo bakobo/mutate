@@ -17,25 +17,25 @@ running (``meta``): the ones in scope with no verdict yet and, unless ``--no-sur
 survivor and "no tests" verdict anywhere, since re-running them is the only way a newly added
 test is noticed.
 
-It writes ``report.json`` (one record per surviving mutant), ``summary.md``,
-``mutmut-run.log`` and ``stamp.json`` to ``<TARGET>/.ignored/mutation/``; a run that
-fails leaves the previous ``stamp.json`` as it was, while an interrupted one still writes it. It exits 0 whether or
-not any mutant survived; 130 when interrupted, after reporting what finished, since mutmut
-saves each verdict as it completes and the next run starts where this one stopped; and 2 when
-the run could not be carried out or was refused, because a harness failure that reported
-success would look exactly like a clean run.
+It writes ``report.json`` (one record per surviving mutant), ``summary.md``, ``mutmut-run.log``
+and ``stamp.json`` to ``<TARGET>/.ignored/mutation/``; a run that fails leaves the previous
+``stamp.json`` as it was, while an interrupted one still writes it. It exits 0 whether or not
+any mutant survived; 130 when interrupted, after reporting what finished, since mutmut saves
+each verdict as it completes and the next run starts where this one stopped; and 2 when the run
+could not be carried out or was refused, because a harness failure that reported success would
+look exactly like a clean run.
 
 Each record's ``class`` is ``string-only`` when the mutation changes nothing but the text inside
 string literals that are message text; ``diagnostic`` when it lies wholly inside the arguments
 of the exception a ``raise`` constructs, or that raise's ``from`` cause, and is inert there
-(``shared.diagnostic``), so the refusal stands and only what it says changes; and ``behavioural`` otherwise. The first
-two are counted rather than ticked. A literal is message text only when ``message_sink`` traces it,
-in the source, into an exception constructor in a ``raise``, a ``print``, a logging call,
-``warnings.warn``, or a sink the repo declares as ``[tool.mutation] message_sinks`` in
-pyproject.toml (see ``shared.message_sinks``); the record carries that sink as
-``message_sink``, null when there is none. A malformed declaration fails the run with
-``SINKS_MALFORMED`` before mutmut starts. ``classify`` decides from the diff and that sink, and
-leans behavioural whenever it cannot vouch for the change.
+(``shared.diagnostic``), so the refusal stands and only what it says changes; and
+``behavioural`` otherwise. The first two are counted rather than ticked. A literal is message
+text only when ``message_sink`` traces it, in the source, into an exception constructor in a
+``raise``, a ``print``, a logging call, ``warnings.warn``, or a sink the repo declares as
+``[tool.mutation] message_sinks`` in pyproject.toml (see ``shared.message_sinks``); the record
+carries that sink as ``message_sink``, null when there is none. A malformed declaration fails
+the run with ``SINKS_MALFORMED`` before mutmut starts. ``classify`` decides from the diff and
+that sink, and leans behavioural whenever it cannot vouch for the change.
 
 A record's ``id`` is a digest of the file, the function and the mutated text, with no line
 number or mutmut ordinal in it, so the same surviving mutation keeps its id across runs while

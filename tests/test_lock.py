@@ -5,7 +5,6 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-from pathlib import Path
 
 import pytest
 
@@ -60,10 +59,14 @@ def test_the_lock_is_released_afterwards(state, tmp_path):
         assert json.loads(state.read_text())["target"] == str(tmp_path / "b")
 
 
+def _fail() -> None:
+    raise RuntimeError("boom")
+
+
 def test_the_lock_is_released_when_the_run_raises(state, tmp_path):
     with pytest.raises(RuntimeError):
         with lock.machine_lock(tmp_path / "a"):
-            raise RuntimeError("boom")
+            _fail()
     with lock.machine_lock(tmp_path / "b"):
         pass
 

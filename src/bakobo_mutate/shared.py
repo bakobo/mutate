@@ -445,19 +445,20 @@ def diagnostic(source: str, line: int, removed: list[str], added: list[str]) -> 
     that cannot be checked that way, a fragment that is not the source, a mutant that does not
     parse, a mutation that removes nothing, is not vouched for.
 
-    Lying inside the arguments is not enough: ``ValueError(1 / 0)`` raises ZeroDivisionError
-    and ``ValueError(1 * 0)`` raises ValueError. So each raise is paired with the one in the
-    same position in the mutant, and every difference between them must be inert: (a) the
-    value of a str constant changed that reaches the argument only through ``+``, ``%``,
-    ``.format`` or an f-string's literal parts, as ``_sink_of_literal`` follows it, and is not
-    the left of ``%`` holding a ``%`` or the receiver of ``.format`` holding a brace, since
-    those can make the formatting itself fail (a str that is a key, a call's argument or a
-    format spec is behaviour: ``d["k"]`` and ``int("3")`` raise when it changes); (b) a whole argument, keyword value
-    or cause became the constant None; or (c) keyword arguments were dropped, the remaining
-    ones, matched by name, being inert themselves. (b) and (c) remove evaluation rather than
-    change it: if the original argument had itself raised, the raise would never have worked,
-    and a test would have noticed. Any other difference, an operator, a number, a name, a call,
-    an attribute, a subscript, a changed count of positional arguments, is behavioural.
+    Lying inside the arguments is not enough: ``ValueError(1 / 0)`` raises ZeroDivisionError and
+    ``ValueError(1 * 0)`` raises ValueError. So each raise is paired with the one in the same
+    position in the mutant, and every difference between them must be inert: (a) the value of a
+    str constant changed that reaches the argument only through ``+``, ``%``, ``.format`` or an
+    f-string's literal parts, as ``_sink_of_literal`` follows it, and is not the left of ``%``
+    holding a ``%`` or the receiver of ``.format`` holding a brace, since those can make the
+    formatting itself fail (a str that is a key, a call's argument or a format spec is
+    behaviour: ``d["k"]`` and ``int("3")`` raise when it changes); (b) a whole argument, keyword
+    value or cause became the constant None; or (c) keyword arguments were dropped, the
+    remaining ones, matched by name, being inert themselves. (b) and (c) remove evaluation
+    rather than change it: if the original argument had itself raised, the raise would never
+    have worked, and a test would have noticed. Any other difference, an operator, a number, a
+    name, a call, an attribute, a subscript, a changed count of positional arguments, is
+    behavioural.
     """
     lines = source.splitlines()
     end = line - 1 + len(removed)

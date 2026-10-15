@@ -184,7 +184,7 @@ def test_a_stamp_round_trips(tmp_path):
     '{"schema": "bakobo.mutation-stamp/1", "base": null, "modules": []}',
     '{"schema": "bakobo.mutation-stamp/1", "base": null, "modules": {"a": {"commit": 1}}}',
     '{"schema": "bakobo.mutation-stamp/1", "base": null, '
-    '"modules": {"a": {"commit": "c", "complete": "yes"}}}',
+    + '"modules": {"a": {"commit": "c", "complete": "yes"}}}',
     '{"schema": "bakobo.mutation-stamp/1", "base": null, "modules": {"a": 3}}',
 ], ids=["not-json", "list", "schema", "base", "modules", "commit", "complete", "entry"])
 def test_a_malformed_stamp_is_refused(tmp_path, text):
