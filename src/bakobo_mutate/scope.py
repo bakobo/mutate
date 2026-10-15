@@ -18,9 +18,11 @@ empty answer, since nothing stale would look exactly like that.
 from __future__ import annotations
 
 import ast
+import datetime
 import fnmatch
 import json
 import subprocess
+import time
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,6 +52,18 @@ GIT_FAILED = ErrorCode(
         "this again; running it again before then will fail the same way."
     ),
 )
+SINCE_MALFORMED = ErrorCode(
+    code="e.input.format.since.f",
+    title="The --since date is not a date in the past, so it would select nothing.",
+    detail="git reads --since {since!r} as {reading}, which is not at least a minute ago.",
+    args=("since", "reading"),
+    hint=(
+        "Give --since a git date in the past, such as '7 days ago' or '2026-10-01'; git reads "
+        "anything it cannot parse as now."
+    ),
+)
+# How far in the past --since must lie, in seconds: git reads what it cannot parse as now.
+SINCE_MARGIN = 60
 STAMP_MALFORMED = ErrorCode(
     code="e.self.corrupt.mutation-stamp.f",
     title="The record of earlier mutation runs is unreadable, so staleness is unknown.",
@@ -97,6 +111,22 @@ def verify_ref(target: Path, ref: str, git: str = "git") -> None:
     proc = _git(target, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", git=git)
     if proc.returncode != 0:
         raise _failed(target, proc)
+
+
+def check_since(target: Path, since: str, git: str = "git") -> None:
+    """Refuse a --since that git does not read as a moment at least SINCE_MARGIN ago.
+
+    git's approxidate turns nonsense into the current time, which makes a window that selects
+    nothing and looks exactly like a repo where nothing changed.
+    """
+    out = _git(target, "rev-parse", f"--since={since}", git=git).stdout.strip()
+    stamp = out.removeprefix("--max-age=")
+    if not (out.startswith("--max-age=") and stamp.isdigit()):
+        raise SINCE_MALFORMED(since=since, reading="nothing at all")
+    when = int(stamp)
+    if time.time() - when < SINCE_MARGIN:
+        reading = datetime.datetime.fromtimestamp(when, datetime.UTC).isoformat(timespec="seconds")
+        raise SINCE_MALFORMED(since=since, reading=reading)
 
 
 def config_at(target: Path, ref: str, git: str = "git") -> dict:

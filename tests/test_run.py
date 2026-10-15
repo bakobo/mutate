@@ -415,6 +415,15 @@ def test_malformed_sinks_fail_before_mutmut(target, fake, uv):
     assert not (target / ".ignored" / "mutation" / "stamp.json").exists()
 
 
+@pytest.mark.parametrize("since", ["nonsense", "2099-01-01"])
+def test_a_since_that_is_no_past_date_is_refused_before_anything_runs(target, fake, uv, since,
+                                                                       capsys):
+    target, _ = target
+    assert run(target, fake, uv, "--since", since) == 2
+    refused(capsys, "e.input.format.since.f")
+    assert fake.calls() == [] and recorded(uv.parent, "uv") == []
+
+
 def test_a_target_without_mutmut_is_refused(target, uv, capsys):
     target, _ = target
     assert mutate.main([str(target), "--uv", str(uv)]) == 2

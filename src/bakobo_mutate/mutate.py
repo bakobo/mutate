@@ -574,6 +574,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     previous = signal.signal(signal.SIGTERM, _terminate)
     try:
         target = checkout.target_root(args.target or Path.cwd(), args.git)
+        scope.check_since(target, args.since, args.git)
         with lock.machine_lock(target):
             return execute(target, args)
     except BakoboError as error:

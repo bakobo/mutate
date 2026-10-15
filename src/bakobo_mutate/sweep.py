@@ -89,6 +89,7 @@ def stale_main(argv: list[str] | None = None, prog: str | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         target = checkout.target_root(args.target or Path.cwd(), args.git)
+        scope.check_since(target, args.since, args.git)
         if args.fetch:
             checkout.fetch(target, args.git)
         modules = stale_modules(target, args.since, args.git)
@@ -191,6 +192,7 @@ def reconcile(ledger: Ledger, modules: list[str] | None) -> str:
 
 def sweep_one(repo: str, tick: str, since: str, git: str) -> str:
     target = checkout.target_root(Path(repo), git)
+    scope.check_since(target, since, git)
     checkout.fetch(target, git)
     return reconcile(Ledger(tick, target), stale_modules(target, since, git))
 

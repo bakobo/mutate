@@ -139,6 +139,30 @@ def test_the_window_defaults_to_src(repo):
                                                             "src/pkg/other.py"]
 
 
+@pytest.mark.parametrize("since", ["nonsense", "2099-01-01", "now"],
+                         ids=["nonsense", "future", "now"])
+def test_a_since_git_does_not_read_as_a_past_date_is_refused(repo, since):
+    # git's approxidate reads nonsense as "now", which would silently select nothing.
+    with pytest.raises(BakoboError) as refused:
+        scope.check_since(repo, since)
+    assert refused.value.code == scope.SINCE_MALFORMED.code == "e.input.format.since.f"
+    assert repr(since) in refused.value.detail
+
+
+@pytest.mark.parametrize("since", ["7 days ago", "2020-01-01", "yesterday"])
+def test_a_since_in_the_past_is_accepted(repo, since):
+    scope.check_since(repo, since)
+
+
+def test_a_since_git_prints_nothing_for_is_refused(repo, tmp_path):
+    fake = tmp_path / "git"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    with pytest.raises(BakoboError) as refused:
+        scope.check_since(repo, "7 days ago", git=str(fake))
+    assert refused.value.code == scope.SINCE_MALFORMED.code
+
+
 # --- the stamp --------------------------------------------------------------------------------
 
 

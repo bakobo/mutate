@@ -88,6 +88,12 @@ def test_stale_refuses_with_a_code(target, capsys):
     assert capsys.readouterr().err.startswith(f"{checkout.NO_DEFAULT_BRANCH.code}: ")
 
 
+def test_stale_refuses_a_since_that_is_no_past_date(target, capsys):
+    target, _ = target
+    assert sweep.stale_main([str(target), "--since", "nonsense"]) == 2
+    assert capsys.readouterr().err.startswith(f"{scope.SINCE_MALFORMED.code}: ")
+
+
 # --- enrolment --------------------------------------------------------------------------------
 
 
@@ -315,6 +321,14 @@ def test_a_missing_tick_is_a_failed_repo(target, tmp_path, capsys):
     sweep.enroll_main([str(target)])
     assert sweep.sweep_main(["--tick", str(tmp_path / "no-such-tick")]) == 1
     assert "no-such-tick" in capsys.readouterr().err
+
+
+def test_a_sweep_refuses_a_since_that_is_no_past_date(target, tmp_path, capsys):
+    target, _ = target
+    sweep.enroll_main([str(target)])
+    assert run_sweep(tick_stub(tmp_path), "--since", "nonsense") == 1
+    assert scope.SINCE_MALFORMED.code in capsys.readouterr().err
+    assert tick_calls(tmp_path) == []
 
 
 def test_an_empty_enrolment_sweeps_nothing(capsys):
