@@ -19,3 +19,6 @@ htmlcov/
 # Mutation runs and local working notes
 mutants/
 .ignored/
+
+# The tick ledger is a local working record, never published.
+/.tick

@@ -18,6 +18,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from conftest import recorded, recorder
 
 from bakobo_mutate import mutate, shared, ticks
 
@@ -110,50 +111,27 @@ DIFF_OPEN = """\
 NAME_SAIDIFY = "pkg.mod.x_saidify__mutmut_3"
 NAME_OPEN = f"pkg.mod.x{SEP}Box{SEP}open__mutmut_1"
 
-RESULTS = "\n".join([
-    "this line is not a result",
-    f"    {NAME_SAIDIFY}: survived",
-    "    pkg.mod.x_saidify__mutmut_1: killed",
-    f"    {NAME_OPEN}: survived",
-    "    pkg.mod.x_saidify__mutmut_2: no tests",
-    "    pkg.other.x_f__mutmut_1: survived",
-]) + "\n"
+SHOWS = {NAME_SAIDIFY: f"# {NAME_SAIDIFY}: survived\n{DIFF_SAIDIFY}\n", NAME_OPEN: DIFF_OPEN + "\n"}
 
 
 @pytest.fixture
 def repo(tmp_path):
     root = tmp_path / "repo"
     (root / "src" / "pkg").mkdir(parents=True)
-    (root / "pyproject.toml").write_text(textwrap.dedent("""\
-        [tool.mutmut]
-        source_paths = ["src/pkg"]
-        do_not_mutate = ["*/pkg/vendored.py"]
-        pytest_add_cli_args = ["-n0", "--no-cov"]
-        """))
     (root / "src" / "pkg" / "mod.py").write_text(MODULE)
-    (root / "src" / "pkg" / "consts.py").write_text("X = 1\n")
-    git(root, "init", "-q", "-b", "main")
-    git(root, "add", ".")
-    git(root, "commit", "-q", "-m", "base", date="2020-01-01T00:00:00")
     return root
 
 
-def run_spec(**run):
+def show_spec(shows=None, tests=None):
     return {
-        "run": run or {"out": "done\n"},
-        "results": RESULTS,
-        "show": {"by_arg": {NAME_SAIDIFY: f"# {NAME_SAIDIFY}: survived\n{DIFF_SAIDIFY}\n",
-                            NAME_OPEN: DIFF_OPEN + "\n"}},
-        "tests-for-mutant": {"by_arg": {NAME_SAIDIFY: "tests/a.py::t1\ntests/a.py::t2\n"},
+        "show": {"by_arg": shows or SHOWS},
+        "tests-for-mutant": {"by_arg": tests or {NAME_SAIDIFY: "tests/a.py::t1\ntests/a.py::t2\n"},
                              "default": "tests/b.py::t\n"},
     }
 
 
-def run_main(repo, mutmut, *extra):
-    code = mutate.main(["--root", str(repo), "--module", "src/pkg/mod.py", "--mutmut",
-                        str(mutmut), "--out", "out", *extra])
-    data = json.loads((repo / "out" / "mutation-report.json").read_text())
-    return code, data, (repo / "out" / "summary.md").read_text()
+def survivors_of(repo, mutmut, names, sinks=()):
+    return [mutate.survivor(str(mutmut), repo, name, "src/pkg/mod.py", sinks) for name in names]
 
 
 # --- the pure parts ---------------------------------------------------------------------------
@@ -162,24 +140,6 @@ def run_main(repo, mutmut, *extra):
 def test_module_names_follow_mutmut():
     assert mutate.module_name("src/pkg/a/b.py") == "pkg.a.b"
     assert mutate.module_name("src/pkg/a/__init__.py") == "pkg.a"
-    assert mutate.globs_for("src/pkg/a/__init__.py") == ["pkg.a.x_*", f"pkg.a.x{SEP}*"]
-
-
-def test_globs_do_not_reach_into_submodules():
-    import fnmatch
-
-    globs = mutate.globs_for("src/pkg/a/__init__.py")
-    assert any(fnmatch.fnmatch("pkg.a.x_f__mutmut_1", g) for g in globs)
-    assert any(fnmatch.fnmatch(f"pkg.a.x{SEP}C{SEP}m__mutmut_1", g) for g in globs)
-    assert not any(fnmatch.fnmatch("pkg.a.sub.x_f__mutmut_1", g) for g in globs)
-
-
-def test_has_functions():
-    assert mutate.has_functions("def f():\n    pass\n")
-    assert mutate.has_functions("async def f():\n    pass\n")
-    assert mutate.has_functions("class C:\n    def m(self):\n        pass\n")
-    assert not mutate.has_functions("class C:\n    x = 1\n")
-    assert not mutate.has_functions("X = 1\n")
 
 
 def test_function_of():
@@ -235,159 +195,22 @@ def test_cell_escapes_and_truncates():
     assert mutate.cell("x" * 100) == "x" * 77 + "..."
 
 
-def test_load_config_without_a_mutmut_table(tmp_path):
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
-    assert mutate.load_config(tmp_path) == {}
+# --- a survivor read back from mutmut -------------------------------------------------------
 
 
-def test_find_mutmut(monkeypatch, tmp_path):
-    (tmp_path / "python").touch()
-    monkeypatch.setattr(mutate.sys, "executable", str(tmp_path / "python"))
-    monkeypatch.setattr(mutate.shutil, "which", lambda name: None)
-    assert mutate.find_mutmut() == "mutmut"
-    (tmp_path / "mutmut").touch()
-    assert mutate.find_mutmut() == str(tmp_path / "mutmut")
-
-
-# --- which modules changed (real git) ---------------------------------------------------------
-
-
-def test_changed_modules(repo):
-    old, new = "2020-01-02T00:00:00", "2030-01-01T00:00:00"
-    pkg = repo / "src" / "pkg"
-    # A branch whose commits are older than the window, merged inside it, still counts.
-    git(repo, "checkout", "-q", "-b", "topic")
-    (pkg / "merged.py").write_text("def f():\n    pass\n")
-    git(repo, "add", ".")
-    git(repo, "commit", "-q", "-m", "topic", date=old)
-    git(repo, "checkout", "-q", "main")
-    git(repo, "merge", "-q", "--no-ff", "-m", "merge", "topic", date=new)
-    (pkg / "mod.py").write_text(MODULE + "\n")
-    (pkg / "vendored.py").write_text("def f():\n    pass\n")
-    (pkg / "notes.txt").write_text("x\n")
-    (repo / "outside.py").write_text("def f():\n    pass\n")
-    (pkg / "consts.py").unlink()
-    git(repo, "add", "-A")
-    git(repo, "commit", "-q", "-m", "recent", date=new)
-    cfg = mutate.load_config(repo)
-    assert mutate.changed_modules(repo, "HEAD", "2029-12-01", cfg) == [
-        "src/pkg/merged.py", "src/pkg/mod.py"]
-    assert mutate.changed_modules(repo, "HEAD", "2031-01-01", cfg) == []
-
-
-def test_changed_modules_defaults_to_src(repo):
-    assert mutate.changed_modules(repo, "HEAD", "2019-01-01", {}) == [
-        "src/pkg/consts.py", "src/pkg/mod.py"]
-
-
-# --- a whole run against a stub mutmut --------------------------------------------------------
-
-
-def test_survivors_are_reported(repo, tmp_path, capsys):
-    mutmut = stub(tmp_path / "bin", "mutmut", run_spec())
-    code, data, text = run_main(repo, mutmut)
-    assert code == 0
-    assert calls(tmp_path / "bin")[0] == ["run", "pkg.mod.x_*", f"pkg.mod.x{SEP}*"]
-    assert data["schema"] == mutate.SCHEMA
-    assert data["commit"] == git(repo, "rev-parse", "HEAD").strip()
-    assert data["since"] == "an explicit module list"
-    assert data["complete"] is True and data["failure"] is None and data["note"] is None
-    assert data["counts"] == {"killed": 1, "no tests": 1, "survived": 2}
-    # Sorted by mutmut name, and its method separator sorts after "_".
-    first, second = data["survivors"]
-    assert first["mutmut_name"] == NAME_SAIDIFY and first["line"] == 6
-    assert first["mutation"]["removed"] == ['        raise ValueError("no label")']
-    assert not first["mutation"]["diff"].startswith("#")
-    assert first["test_result"] == {
+def test_survivors_are_read_back_from_mutmut(repo, tmp_path):
+    mutmut = stub(tmp_path / "bin", "mutmut", show_spec())
+    first, second = survivors_of(repo, mutmut, [NAME_SAIDIFY, NAME_OPEN])
+    assert calls(tmp_path / "bin")[:2] == [["show", NAME_SAIDIFY],
+                                            ["tests-for-mutant", NAME_SAIDIFY]]
+    assert first.line == 6 and first.removed == ['        raise ValueError("no label")']
+    assert not first.diff.startswith("#") and first.tests == 2
+    assert (second.file, second.line, second.function) == ("src/pkg/mod.py", 14, "Box.open")
+    assert second.tests == 1 and first.id != second.id
+    record = first.record(["-n0", "--no-cov"])
+    assert record["test_result"] == {
         "command": "pytest -n0 --no-cov", "tests_run": 2, "exit_code": 0,
         "outcome": "passed: every test covering this function passed with the mutant in place"}
-    assert second["mutmut_name"] == NAME_OPEN
-    assert (second["file"], second["line"], second["function"]) == ("src/pkg/mod.py", 14,
-                                                                    "Box.open")
-    assert second["test_result"]["tests_run"] == 1
-    assert len({first["id"], second["id"]}) == 2
-    assert "## 2 surviving mutants" in text and "`src/pkg/mod.py:14`" in text
-    assert "| survived | 2 |" in text and "- `src/pkg/mod.py`" in text
-    assert "## 2 surviving mutants" in capsys.readouterr().out
-
-
-def test_no_survivors(repo, tmp_path):
-    spec = run_spec()
-    spec["results"] = "    pkg.mod.x_saidify__mutmut_1: killed\n"
-    _, data, text = run_main(repo, stub(tmp_path / "bin", "mutmut", spec))
-    assert data["survivors"] == [] and "No mutant survived." in text
-
-
-def test_nothing_changed_exits_cleanly(repo, tmp_path):
-    mutmut = stub(tmp_path / "bin", "mutmut", run_spec())
-    code = mutate.main(["--root", str(repo), "--since", "2031-01-01", "--mutmut", str(mutmut),
-                        "--out", str(tmp_path / "abs-out")])
-    data = json.loads((tmp_path / "abs-out" / "mutation-report.json").read_text())
-    assert code == 0 and calls(tmp_path / "bin") == []
-    assert data["modules"] == [] and data["since"] == "2031-01-01"
-    assert "nothing to mutate" in data["note"]
-    text = (tmp_path / "abs-out" / "summary.md").read_text()
-    assert "No mutant survived." in text and "<details>" not in text
-
-
-def test_modules_without_functions(repo, tmp_path):
-    mutmut = stub(tmp_path / "bin", "mutmut", run_spec())
-    code = mutate.main(["--root", str(repo), "--module", "src/pkg/consts.py", "--mutmut",
-                        str(mutmut)])
-    data = json.loads((repo / "mutation-out" / "mutation-report.json").read_text())
-    assert code == 0 and calls(tmp_path / "bin") == []
-    assert "define no functions" in data["note"]
-
-
-def test_no_mutants_generated(repo, tmp_path):
-    spec = run_spec(exit=1, out=f"AssertionError: {mutate.NOTHING_MATCHES}\n")
-    # The proof: mutmut holds no mutant at all for the changed modules.
-    spec["results"] = "    pkg.other.x_f__mutmut_1: survived\n"
-    mutmut = stub(tmp_path / "bin", "mutmut", spec)
-    code, data, _ = run_main(repo, mutmut)
-    assert code == 0 and data["failure"] is None
-    assert data["note"] == "mutmut generated no mutants for the changed modules."
-
-
-def test_a_harness_failure_fails_the_run(repo, tmp_path):
-    spec = run_spec(exit=1, out="Failed to run clean test\n")
-    mutmut = stub(tmp_path / "bin", "mutmut", spec)
-    code, data, text = run_main(repo, mutmut)
-    assert code == 2
-    assert data["failure"].startswith("mutmut exited 1")
-    assert "Failed to run clean test" in data["failure"]
-    assert data["failure_code"] == mutate.RUN_FAILED.code == "e.env.mutmut-run.f"
-    assert data["failure_retryable"] is False
-    assert data["failure_hint"] == mutate.RUN_FAILED.hint
-    assert "The run failed" in text and "No mutant survived." not in text
-    assert "`e.env.mutmut-run.f`" in text and "Running it again will not help" in text
-    assert mutate.RUN_FAILED.hint in text
-
-
-def test_the_budget_stops_the_run_and_keeps_what_finished(repo, tmp_path):
-    mutmut = stub(tmp_path / "bin", "mutmut", run_spec(sleep=30))
-    code, data, text = run_main(repo, mutmut, "--budget-minutes", "0.01")
-    assert code == 0 and data["complete"] is False
-    assert "budget ran out" in data["note"] and len(data["survivors"]) == 2
-    assert "budget ran out" in text
-
-
-def test_a_run_ignoring_sigterm_is_killed(repo, tmp_path, monkeypatch):
-    monkeypatch.setattr(mutate, "TERM_GRACE", 0.5)
-    mutmut = stub(tmp_path / "bin", "mutmut", run_spec(sleep=30, ignore_term=True))
-    code, data, _ = run_main(repo, mutmut, "--budget-minutes", "0.01")
-    assert code == 0 and data["complete"] is False
-
-
-def test_entry_point(repo, tmp_path, monkeypatch):
-    mutmut = stub(tmp_path / "bin", "mutmut", run_spec())
-    monkeypatch.setattr(sys, "argv", ["mutate.py", "--root", str(repo), "--since", "2031-01-01",
-                                      "--mutmut", str(mutmut)])
-    with pytest.raises(SystemExit) as exit_:
-        # Unimported first, as `python -m` would find it; monkeypatch puts it back afterwards.
-        monkeypatch.delitem(sys.modules, "bakobo_mutate.mutate")
-        runpy.run_module("bakobo_mutate.mutate", run_name="__main__", alter_sys=True)
-    assert exit_.value.code == 0
 
 
 # --- filing ticks -----------------------------------------------------------------------------
@@ -438,9 +261,10 @@ def test_ticks_files_only_new_survivors(sample, tmp_path, capsys):
     notes = [c for c in log if c[0] == "note"]
     assert len(notes) == 2 and notes[0][1] == "4ghi"
     assert "commit c0ffee" in notes[0][2] and "-a\n+b" in notes[0][2]
+    assert "survived a bakobo-mutate run" in notes[0][2] and "nightly" not in notes[0][2]
     assert "Test command: pytest -n0 --no-cov" in notes[0][2]
-    assert ("filed 2; 2 already ticked; 0 re-noted; 0 string-only survivors not ticked; "
-            "4 survivors" in capsys.readouterr().out)
+    assert ("filed 2; 2 already ticked; 0 re-noted; 0 string-only and 0 diagnostic survivors "
+            "not ticked; 4 survivors" in capsys.readouterr().out)
 
 
 def test_ticks_dry_run_files_nothing(sample, tmp_path, capsys):
@@ -453,33 +277,117 @@ def test_ticks_dry_run_files_nothing(sample, tmp_path, capsys):
     assert "would file 2; 2 already ticked" in out
 
 
-def test_ticks_downloads_the_latest_run(sample, tmp_path):
-    gh = stub(tmp_path / "ghbin", "gh", {"run": {"by_arg": {
-        ".[0].databaseId": {"out": "123\n"}}, "default": {"copy": str(sample)}}})
+def test_ticks_reads_the_targets_own_report_by_default(sample, tmp_path, capsys):
+    root = tmp_path / "target"
+    (root / ".ignored" / "mutation").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (root / ".ignored" / "mutation" / "report.json").write_text(sample.read_text())
     tick = tick_stub(tmp_path)
-    assert ticks.main(["--gh", str(gh), "--tick", str(tick), "--dry-run"]) == 0
-    first, second = calls(tmp_path / "ghbin")
-    assert first[:4] == ["run", "list", "--workflow", "mutation.yml"]
-    # Only scheduled runs on main: a manual run of a feature branch is never "the latest".
-    assert first[first.index("--branch") + 1] == "main"
-    assert first[first.index("--event") + 1] == "schedule"
-    assert second[:5] == ["run", "download", "123", "--name", "mutation-report"]
+    assert ticks.main([str(root), "--tick", str(tick), "--dry-run"]) == 0
+    assert "would file 2" in capsys.readouterr().out
 
 
-def test_ticks_downloads_a_named_run(sample, tmp_path):
-    gh = stub(tmp_path / "ghbin", "gh", {"run": {"copy": str(sample)}})
-    tick = tick_stub(tmp_path)
-    assert ticks.main(["--run-id", "77", "--gh", str(gh), "--tick", str(tick),
-                       "--dry-run"]) == 0
-    assert calls(tmp_path / "ghbin")[0][:3] == ["run", "download", "77"]
+def test_every_tick_runs_in_the_target_not_the_callers_directory(sample, tmp_path,
+                                                                monkeypatch):
+    root = tmp_path / "target"
+    (root / ".ignored" / "mutation").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (root / ".ignored" / "mutation" / "report.json").write_text(sample.read_text())
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    tick = recorder(tmp_path / "rec", "tick", {
+        "ls": {"out": "2abc  debt   mutation survivor [m:aaaaaaaaaaaa] x.py:6 in f\n"},
+        "add": {"out": "4ghi  filed\n"}, "show": {"out": "title\n"}, "note": {}})
+    assert ticks.main([str(root), "--tick", str(tick)]) == 0
+    seen = recorded(tmp_path / "rec", "tick")
+    assert {c["argv"][0] for c in seen} == {"ls", "add", "note", "show"}
+    assert {c["cwd"] for c in seen} == {str(root)}
 
 
-def test_ticks_without_a_successful_run(tmp_path, capsys):
-    gh = stub(tmp_path / "ghbin", "gh", {"run": {"out": "\n"}})
-    assert ticks.main(["--gh", str(gh)]) == 1
+def _target_with_report(tmp_path, sample):
+    root = tmp_path / "target"
+    (root / ".ignored" / "mutation").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (root / ".ignored" / "mutation" / "report.json").write_text(sample.read_text())
+    return root
+
+
+TICK_ANSWERS = {"ls": {"out": "(no ticks)\n"}, "add": {"out": "4ghi  filed\n"},
+                "show": {"out": "title\n"}, "note": {}}
+
+
+def test_a_relative_tick_path_is_the_callers_not_the_targets(sample, tmp_path, monkeypatch):
+    root = _target_with_report(tmp_path, sample)
+    caller = tmp_path / "caller"
+    recorder(caller / "bin", "tick", TICK_ANSWERS)
+    monkeypatch.chdir(caller)
+    assert ticks.main([str(root), "--tick", "bin/tick"]) == 0
+    seen = recorded(caller / "bin", "tick")
+    assert seen and {c["cwd"] for c in seen} == {str(root)}
+
+
+def test_a_bare_tick_name_is_looked_up_on_path(sample, tmp_path, monkeypatch):
+    root = _target_with_report(tmp_path, sample)
+    recorder(tmp_path / "onpath", "tick", TICK_ANSWERS)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'onpath'}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.chdir(tmp_path)
+    assert ticks.main([str(root), "--tick", "tick"]) == 0
+    assert recorded(tmp_path / "onpath", "tick")
+
+
+def test_ticks_finds_the_target_around_the_cwd(sample, tmp_path, monkeypatch, capsys):
+    root = tmp_path / "target"
+    (root / "docs").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    git(root, "init", "-q", "-b", "main")
+    (root / ".ignored" / "mutation").mkdir(parents=True)
+    (root / ".ignored" / "mutation" / "report.json").write_text(sample.read_text())
+    monkeypatch.chdir(root / "docs")
+    assert ticks.main(["--tick", str(tick_stub(tmp_path)), "--dry-run"]) == 0
+    assert "would file 2" in capsys.readouterr().out
+
+
+def test_ticks_outside_a_repo_is_refused(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert ticks.main(["--tick", "/nonexistent"]) == 2
+    assert capsys.readouterr().err.startswith("e.state.missing.git-repo.f: ")
+
+
+def test_ticks_without_a_report_says_to_run_first(tmp_path, capsys):
+    root = tmp_path / "target"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    assert ticks.main([str(root), "--tick", "/nonexistent"]) == 1
     err = capsys.readouterr().err
     assert err.startswith(f"{ticks.NO_REPORT.code}: ") and ticks.NO_REPORT.code.endswith(".r")
-    assert f"Hint: {ticks.NO_REPORT.hint}" in err
+    assert str(root / ".ignored" / "mutation" / "report.json") in err
+    assert "bakobo-mutate run" in err and "nightly" not in err
+
+
+def test_the_download_path_is_gone():
+    assert not hasattr(ticks, "download")
+    with pytest.raises(SystemExit):
+        ticks.parse(["--run-id", "1"])
+    with pytest.raises(SystemExit):
+        ticks.parse(["--gh", "gh"])
+
+
+@pytest.mark.parametrize("text", [ticks.MALFORMED.title, ticks.MALFORMED.hint,
+                                  ticks.NO_REPORT.title, ticks.NO_REPORT.detail,
+                                  ticks.NO_REPORT.hint, ticks.FAILED_RUN.hint,
+                                  ticks.__doc__], ids=["malformed-title", "malformed-hint",
+                                                       "no-report-title", "no-report-detail",
+                                                       "no-report-hint", "failed-hint", "doc"])
+def test_the_prose_describes_the_tool_as_it_now_is(text):
+    for stale in ("nightly", "tools/mutation", "mutate.py", "workflow", "scheduled"):
+        assert stale not in text
+
+
+def test_the_error_codes_are_unchanged():
+    assert (ticks.MALFORMED.code, ticks.NO_REPORT.code, ticks.FAILED_RUN.code) == (
+        "e.input.format.mutation-report.f", "e.state.mutation-report-missing.r",
+        "e.state.mutation-run-failed.f")
 
 
 def test_ticks_refuses_a_failed_report(tmp_path, capsys):
@@ -522,7 +430,7 @@ REAL = json.loads((Path(__file__).resolve().parent
     (['f("a",', '  "b")'], ['f("a",', '  "XXbXX")']),
 ])
 def test_a_change_inside_a_message_literal_is_string_only(removed, added):
-    assert mutate.classify(removed, added, "raise ValueError") == STRING_ONLY
+    assert shared.classify(removed, added, "raise ValueError") == STRING_ONLY
 
 
 @pytest.mark.parametrize("removed, added", [
@@ -530,7 +438,7 @@ def test_a_change_inside_a_message_literal_is_string_only(removed, added):
     (['    return "allow"'], ['    return "XXallowXX"']),
 ])
 def test_a_string_change_outside_a_message_sink_is_behavioural(removed, added):
-    assert mutate.classify(removed, added, None) == BEHAVIOURAL
+    assert shared.classify(removed, added, None) == BEHAVIOURAL
 
 
 @pytest.mark.parametrize("removed, added", [
@@ -549,7 +457,7 @@ def test_a_string_change_outside_a_message_sink_is_behavioural(removed, added):
     (['y = 1', 'z = "a"'], ['y = 1']),
 ])
 def test_anything_else_is_behavioural(removed, added):
-    assert mutate.classify(removed, added, "raise ValueError") == BEHAVIOURAL
+    assert shared.classify(removed, added, "raise ValueError") == BEHAVIOURAL
 
 
 
@@ -558,7 +466,7 @@ def test_the_real_utina_survivors_split_under_its_declared_sinks():
     # Every one changes text handed to Refusal(...). utina declares Refusal's missing and
     # detail as message sinks, so 54 are string-only. Three change a literal or a slice inside
     # an f-string's {...} (', '.join, [:16] to [:17]), which is code, and stay behavioural.
-    classes = {s["id"]: mutate.classify(s["removed"], s["added"], s["message_sink"])
+    classes = {s["id"]: shared.classify(s["removed"], s["added"], s["message_sink"])
                for s in REAL["utina"]}
     assert len(classes) == 57
     assert sorted(i for i, c in classes.items() if c == BEHAVIOURAL) == [
@@ -567,28 +475,35 @@ def test_the_real_utina_survivors_split_under_its_declared_sinks():
         "declared Refusal.missing", "declared Refusal.detail"}
 
 
-def string_spec():
-    spec = run_spec()
-    diff = DIFF_SAIDIFY.replace('raise ValueError(None)', 'raise ValueError("NO LABEL")')
-    spec["show"]["by_arg"][NAME_SAIDIFY] = diff + "\n"
-    return spec
-
-
 def test_the_report_carries_each_survivors_class(repo, tmp_path):
-    _, data, text = run_main(repo, stub(tmp_path / "bin", "mutmut", string_spec()))
+    diff = DIFF_SAIDIFY.replace('raise ValueError(None)', 'raise ValueError("NO LABEL")')
+    mutmut = stub(tmp_path / "bin", "mutmut", show_spec({**SHOWS, NAME_SAIDIFY: diff + "\n"}))
+    outcome = mutate.Outcome(modules=["src/pkg/mod.py"],
+                             survivors=survivors_of(repo, mutmut, [NAME_SAIDIFY, NAME_OPEN]))
+    data = mutate.report(outcome, {}, "c0ffee", "scope")
+    text = mutate.summary(data)
     assert [s["class"] for s in data["survivors"]] == [STRING_ONLY, BEHAVIOURAL]
     assert [s["message_sink"] for s in data["survivors"]] == ["raise ValueError", None]
-    assert data["classes"] == {BEHAVIOURAL: 1, STRING_ONLY: 1}
+    assert data["classes"][BEHAVIOURAL] == 1 and data["classes"][STRING_ONLY] == 1
     assert "1 behavioural, 1 string-only" in text
     assert "| string-only |" in text and "| behavioural |" in text
 
 
-def test_a_report_without_survivors_has_empty_classes(repo, tmp_path):
-    spec = run_spec()
-    spec["results"] = "    pkg.mod.x_saidify__mutmut_1: killed\n"
-    _, data, text = run_main(repo, stub(tmp_path / "bin", "mutmut", spec))
-    assert data["classes"] == {BEHAVIOURAL: 0, STRING_ONLY: 0}
-    assert "string-only" not in text
+def test_a_raises_argument_made_none_is_behavioural(repo, tmp_path):
+    # DIFF_SAIDIFY turns raise ValueError("no label") into raise ValueError(None). An argument
+    # made None is never inert: the constructor's contract is invisible in the source.
+    mutmut = stub(tmp_path / "bin", "mutmut", show_spec())
+    saidify, opened = survivors_of(repo, mutmut, [NAME_SAIDIFY, NAME_OPEN])
+    assert saidify.kind == BEHAVIOURAL and saidify.record([])["class"] == "behavioural"
+    assert opened.kind == BEHAVIOURAL
+
+
+def test_a_report_without_survivors_has_empty_classes():
+    data = mutate.report(mutate.Outcome(modules=[], counts={"killed": 1}), {}, "c0ffee", "s")
+    assert set(data["classes"].values()) == {0}
+    text = mutate.summary(data)
+    assert "string-only" not in text and "No mutant survived." in text
+    assert "<details>" not in text and "| killed | 1 |" in text
 
 
 def real_report(tmp_path, repo_name):
@@ -610,11 +525,11 @@ def test_ticks_files_utinas_behavioural_survivors(tmp_path, capsys):
     root = sinks_root(tmp_path, f"[tool.mutation]\nmessage_sinks = {list(UTINA_SINKS)!r}\n")
     tick = tick_stub(tmp_path)
     assert ticks.main(["--report", str(real_report(tmp_path, "utina")), "--tick",
-                       str(tick), "--root", str(root)]) == 0
+                       str(tick), str(root)]) == 0
     adds = [c[-1] for c in calls(tmp_path / "tickbin") if c[0] == "add"]
     assert sorted(a.split()[2] for a in adds) == [
         "[m:3844d16a640a]", "[m:e594c88ec0cc]", "[m:eb3b234984ca]"]
-    assert "filed 3; 0 already ticked; 0 re-noted; 54 string-only survivors not ticked" in (
+    assert "filed 3; 0 already ticked; 0 re-noted; 54 string-only and 0 diagnostic survivors" in (
         capsys.readouterr().out)
 
 
@@ -735,7 +650,7 @@ def bad(record):
     (bad("a string"), "survivor 1"),
     ({"commit": "c0ffee", "failure": None, "survivors": {}}, "the report"),
     ({"failure": None, "survivors": []}, "the report"),
-    ({"schema": "bakobo.mutation-report/2", "commit": "c0ffee", "failure": None,
+    ({"schema": "bakobo.mutation-report/1", "commit": "c0ffee", "failure": None,
       "survivors": []}, "the report's schema"),
     ({"schema": mutate.SCHEMA, "failure": None, "survivors": []}, "names no commit"),
     ({"schema": mutate.SCHEMA, "commit": "c0ffee", "failure": None, "survivors": {}},
@@ -753,39 +668,13 @@ def test_a_malformed_report_is_refused_with_a_code(tmp_path, capsys, report_data
     assert calls(tmp_path / "tickbin") == []
 
 
-# --- a failed run is never "no mutants" -----------------------------------
-
-
-def test_nothing_matches_beside_a_clean_test_failure_is_a_failure(repo, tmp_path):
-    out = f"Failed to run clean test\nAssertionError: {mutate.NOTHING_MATCHES}\n"
-    mutmut = stub(tmp_path / "bin", "mutmut", run_spec(exit=1, out=out))
-    code, data, text = run_main(repo, mutmut)
-    assert code == 2 and data["failure"].startswith("mutmut exited 1")
-    assert data["note"] is None and "The run failed" in text
-
-
-def test_nothing_matches_with_mutants_on_record_is_a_failure(repo, tmp_path):
-    # RESULTS lists mutants of pkg.mod, so the "nothing matches" text is not the whole story.
-    mutmut = stub(tmp_path / "bin", "mutmut",
-                  run_spec(exit=1, out=f"AssertionError: {mutate.NOTHING_MATCHES}\n"))
-    code, data, _ = run_main(repo, mutmut)
-    assert code == 2 and data["failure"].startswith("mutmut exited 1")
-
-
-def test_nothing_matches_without_readable_results_is_a_failure(repo, tmp_path):
-    spec = run_spec(exit=1, out=f"AssertionError: {mutate.NOTHING_MATCHES}\n")
-    spec["results"] = {"exit": 1, "out": ""}
-    code, data, _ = run_main(repo, stub(tmp_path / "bin", "mutmut", spec))
-    assert code == 2 and data["failure"].startswith("mutmut exited 1")
-
-
 # --- an assignment is a value, not a message ------------------------------
 
 
 def test_a_string_assigned_to_a_name_is_behavioural():
     source = 'def f(observed):\n    outcome = "kept"\n    return outcome\n'
     assert mutate.message_sink(source, 2, 2) is None
-    assert mutate.classify(['    outcome = "kept"'], ['    outcome = "XXkeptXX"'],
+    assert shared.classify(['    outcome = "kept"'], ['    outcome = "XXkeptXX"'],
                            mutate.message_sink(source, 2, 2)) == BEHAVIOURAL
 
 
@@ -818,27 +707,19 @@ def test_an_oversized_report_is_refused_unread(tmp_path, capsys, monkeypatch):
 
 def test_a_missing_report_is_refused(tmp_path, capsys):
     absent = str(tmp_path / "absent.json")
-    assert ticks.main(["--report", absent, "--tick", "/nonexistent"]) == 2
+    assert ticks.main(["--report", absent, "--tick", "/nonexistent"]) == 1
+    assert capsys.readouterr().err.startswith(f"{ticks.NO_REPORT.code}: ")
+
+
+def test_an_unreadable_report_file_is_malformed(tmp_path, capsys):
+    (tmp_path / "dir.json").mkdir()
+    assert ticks.main(["--report", str(tmp_path / "dir.json"), "--tick", "/nonexistent"]) == 2
     assert "could not be read" in capsys.readouterr().err
 
 
 def test_the_report_limit_is_documented_and_generous():
     assert shared.MAX_REPORT_BYTES == 16 * 1024 * 1024
     assert "16 MiB" in ticks.__doc__
-
-
-# --- post-processing failures are recorded (utina 4190230124) ---------------------------------
-
-
-@pytest.mark.parametrize("command", ["results", "show", "tests-for-mutant"])
-def test_a_failing_mutmut_query_is_a_recorded_failure(repo, tmp_path, command):
-    spec = run_spec()
-    spec[command] = {"exit": 1, "out": ""}
-    code, data, text = run_main(repo, stub(tmp_path / "bin", "mutmut", spec))
-    assert code == 2
-    assert data["failure_code"] == mutate.RESULTS_UNREADABLE.code == "e.env.mutmut-results.r"
-    assert data["failure_retryable"] is True and f"mutmut {command}" in data["failure"]
-    assert data["survivors"] == [] and "Running it again may help" in text
 
 
 # --- ids come from the source, not from what survived -----
@@ -868,12 +749,10 @@ DIFF_TWIN_2 = """\
 def twin_ids(repo, tmp_path, survived):
     (repo / "src" / "pkg" / "mod.py").write_text(TWIN)
     names = {1: "pkg.mod.x_twin__mutmut_1", 2: "pkg.mod.x_twin__mutmut_2"}
-    spec = run_spec()
-    spec["results"] = "".join(
-        f"    {names[n]}: {'survived' if n in survived else 'killed'}\n" for n in (1, 2))
-    spec["show"] = {"by_arg": {names[1]: DIFF_TWIN_1 + "\n", names[2]: DIFF_TWIN_2 + "\n"}}
-    _, data, _ = run_main(repo, stub(tmp_path / f"bin{len(survived)}", "mutmut", spec))
-    return {s["mutmut_name"][-1]: s["id"] for s in data["survivors"]}
+    spec = show_spec({names[1]: DIFF_TWIN_1 + "\n", names[2]: DIFF_TWIN_2 + "\n"})
+    mutmut = stub(tmp_path / f"bin{len(survived)}", "mutmut", spec)
+    return {s.mutmut_name[-1]: s.id for s in survivors_of(repo, mutmut,
+                                                         [names[n] for n in sorted(survived)])}
 
 
 def test_a_survivors_id_does_not_depend_on_its_twin_surviving(repo, tmp_path):
@@ -1032,42 +911,33 @@ DIFF_REFUSE = """\
      )"""
 
 
-def refusing_spec():
+def refusing_survivor(repo, tmp_path, sinks=()):
+    (repo / "src" / "pkg" / "mod.py").write_text(REFUSING)
     name = "pkg.mod.x_refuse__mutmut_1"
-    return {"run": {"out": "done\n"}, "results": f"    {name}: survived\n",
-            "show": {"by_arg": {name: DIFF_REFUSE + "\n"}},
-            "tests-for-mutant": {"default": "tests/t.py::t\n"}}
-
-
-def declare(repo, body):
-    with (repo / "pyproject.toml").open("a") as handle:
-        handle.write(body)
+    mutmut = stub(tmp_path / "bin", "mutmut", show_spec({name: DIFF_REFUSE + "\n"}))
+    (survivor_,) = survivors_of(repo, mutmut, [name], sinks)
+    return survivor_
 
 
 def test_mutate_reads_the_declared_sinks(repo, tmp_path):
-    (repo / "src" / "pkg" / "mod.py").write_text(REFUSING)
-    declare(repo, '\n[tool.mutation]\nmessage_sinks = ["Refusal.missing"]\n')
-    _, data, _ = run_main(repo, stub(tmp_path / "bin", "mutmut", refusing_spec()))
-    (record,) = data["survivors"]
-    assert record["line"] == 7 and record["message_sink"] == "declared Refusal.missing"
-    assert record["class"] == STRING_ONLY
+    (repo / "pyproject.toml").write_text('[tool.mutation]\nmessage_sinks = ["Refusal.missing"]\n')
+    record = refusing_survivor(repo, tmp_path, mutate.declared_sinks(repo))
+    assert record.line == 7 and record.sink == "declared Refusal.missing"
+    assert record.kind == STRING_ONLY
 
 
 def test_without_a_declaration_the_same_survivor_is_behavioural(repo, tmp_path):
-    (repo / "src" / "pkg" / "mod.py").write_text(REFUSING)
-    _, data, _ = run_main(repo, stub(tmp_path / "bin", "mutmut", refusing_spec()))
-    (record,) = data["survivors"]
-    assert record["message_sink"] is None and record["class"] == BEHAVIOURAL
+    record = refusing_survivor(repo, tmp_path)
+    assert record.sink is None and record.kind == BEHAVIOURAL
 
 
-def test_a_malformed_declaration_fails_the_run_before_mutmut(repo, tmp_path):
-    declare(repo, '\n[tool.mutation]\nmessage_sinks = "Refusal"\n')
-    code, data, text = run_main(repo, stub(tmp_path / "bin", "mutmut", refusing_spec()))
-    assert code == 2 and calls(tmp_path / "bin") == []
-    assert data["failure_code"] == mutate.SINKS_MALFORMED.code
-    assert mutate.SINKS_MALFORMED.code == "e.self.config.message-sinks.f"
-    assert "message_sinks" in data["failure"] and data["survivors"] == []
-    assert "`e.self.config.message-sinks.f`" in text
+@pytest.mark.parametrize("body", ['\n[tool.mutation]\nmessage_sinks = "Refusal"\n',
+                                  'tool = "bad"\n'])
+def test_a_malformed_declaration_is_refused_with_its_code(repo, body):
+    (repo / "pyproject.toml").write_text(body)
+    with pytest.raises(mutate.BakoboError) as refused:
+        mutate.declared_sinks(repo)
+    assert refused.value.code == mutate.SINKS_MALFORMED.code == "e.self.config.message-sinks.f"
 
 
 def declared_report(tmp_path, sink):
@@ -1085,9 +955,9 @@ def test_ticks_honours_a_sink_this_repo_declares(tmp_path, capsys):
     root = sinks_root(tmp_path, '[tool.mutation]\nmessage_sinks = ["Refusal.missing"]\n')
     tick = stub(tmp_path / "tickbin", "tick", {"ls": "(no ticks)\n"})
     path = declared_report(tmp_path, "declared Refusal.missing")
-    assert ticks.main(["--report", str(path), "--tick", str(tick), "--root", str(root)]) == 0
+    assert ticks.main(["--report", str(path), "--tick", str(tick), str(root)]) == 0
     assert [c[0] for c in calls(tmp_path / "tickbin")] == ["ls"]
-    assert "1 string-only survivors not ticked" in capsys.readouterr().out
+    assert "1 string-only and 0 diagnostic survivors not ticked" in capsys.readouterr().out
 
 
 def test_ticks_files_a_survivor_whose_sink_is_no_longer_declared(tmp_path):
@@ -1095,7 +965,7 @@ def test_ticks_files_a_survivor_whose_sink_is_no_longer_declared(tmp_path):
     root = sinks_root(tmp_path, '[project]\nname = "x"\n')
     tick = stub(tmp_path / "tickbin", "tick", {"ls": "(no ticks)\n", "add": "4ghi  t\n"})
     path = declared_report(tmp_path, "declared Refusal.missing")
-    assert ticks.main(["--report", str(path), "--tick", str(tick), "--root", str(root)]) == 0
+    assert ticks.main(["--report", str(path), "--tick", str(tick), str(root)]) == 0
     assert [c[0] for c in calls(tmp_path / "tickbin")] == ["ls", "add", "note"]
 
 
@@ -1103,7 +973,7 @@ def test_ticks_refuses_a_malformed_declaration_before_the_ledger(tmp_path, capsy
     root = sinks_root(tmp_path, '[tool.mutation]\nmessage_sinks = [1]\n')
     tick = tick_stub(tmp_path)
     path = declared_report(tmp_path, "declared Refusal.missing")
-    assert ticks.main(["--report", str(path), "--tick", str(tick), "--root", str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", str(tick), str(root)]) == 2
     err = capsys.readouterr().err
     assert err.startswith(f"{mutate.SINKS_MALFORMED.code}: ")
     assert f"Hint: {mutate.SINKS_MALFORMED.hint}" in err
@@ -1113,14 +983,13 @@ def test_ticks_refuses_a_malformed_declaration_before_the_ledger(tmp_path, capsy
 def test_ticks_refuses_an_unreadable_pyproject(tmp_path, capsys):
     root = sinks_root(tmp_path, "this is = not [toml")
     path = declared_report(tmp_path, None)
-    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", "--root",
-                       str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", str(root)]) == 2
     assert capsys.readouterr().err.startswith(f"{mutate.SINKS_MALFORMED.code}: ")
 
 
-def test_ticks_finds_the_repo_root_by_default():
-    # Installed as a tool, the module sits in no repo, so the repo is the one it is run from.
-    assert ticks.parse([]).root == Path.cwd()
+def test_ticks_takes_the_target_as_a_positional_argument():
+    assert ticks.parse([]).target is None
+    assert ticks.parse(["/x"]).target == Path("/x")
 
 
 # --- second hostile pass on message sinks ----------------------------------------------------
@@ -1133,11 +1002,11 @@ def test_ticks_finds_the_repo_root_by_default():
 ])
 def test_emptying_or_filling_a_literal_is_behavioural(removed, added):
     # Validators refuse empty text, so whether a literal is empty is behaviour (utina#15 1).
-    assert mutate.classify(removed, added, "declared Refusal.missing") == BEHAVIOURAL
+    assert shared.classify(removed, added, "declared Refusal.missing") == BEHAVIOURAL
 
 
 def test_a_raw_literal_changing_case_is_still_string_only():
-    assert mutate.classify(['    raise E(r"a rule")'], ['    raise E(r"A RULE")'],
+    assert shared.classify(['    raise E(r"a rule")'], ['    raise E(r"A RULE")'],
                            "raise E") == STRING_ONLY
 
 
@@ -1172,11 +1041,11 @@ def test_a_format_string_with_placeholders_is_not_message_text(line, sink):
 ])
 def test_a_literal_inside_an_fstring_expression_is_behavioural(removed, added):
     # The replacement field is code; a literal there is an argument, not text.
-    assert mutate.classify(removed, added, "raise E") == BEHAVIOURAL
+    assert shared.classify(removed, added, "raise E") == BEHAVIOURAL
 
 
 def test_fstring_text_around_an_expression_is_still_string_only():
-    assert mutate.classify(['    raise E(f"a {f(\'b\')} c")'],
+    assert shared.classify(['    raise E(f"a {f(\'b\')} c")'],
                            ['    raise E(f"A {f(\'b\')} C")'],
                            "raise E") == STRING_ONLY
 
@@ -1230,21 +1099,13 @@ def test_every_malformed_config_is_a_coded_refusal(tmp_path, capsys, body, probl
     else:
         pyproject.write_text(body)
     path = declared_report(tmp_path, None)
-    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", "--root",
-                       str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", str(root)]) == 2
     err = capsys.readouterr().err
     assert err.startswith(f"{mutate.SINKS_MALFORMED.code}: ") and problem in err
 
 
-def test_mutate_refuses_a_non_table_tool_before_reading_mutmut_config(repo, tmp_path):
-    (repo / "pyproject.toml").write_text('tool = "bad"\n')
-    code, data, _ = run_main(repo, stub(tmp_path / "bin", "mutmut", refusing_spec()))
-    assert code == 2 and calls(tmp_path / "bin") == []
-    assert data["failure_code"] == mutate.SINKS_MALFORMED.code
-
-
 def test_a_literal_python_cannot_evaluate_is_behavioural():
-    assert mutate.classify(['    raise E("\\N{NO SUCH NAME} a")'],
+    assert shared.classify(['    raise E("\\N{NO SUCH NAME} a")'],
                            ['    raise E("\\N{NO SUCH NAME} b")'], "raise E") == BEHAVIOURAL
 
 
@@ -1270,8 +1131,7 @@ def test_an_oversized_pyproject_is_refused_before_it_is_decoded(tmp_path, capsys
     monkeypatch.setattr(shared, "MAX_PYPROJECT_BYTES", 64)
     root = sinks_root(tmp_path, "# " + "x" * 100 + "\n")
     path = declared_report(tmp_path, None)
-    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", "--root",
-                       str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", str(root)]) == 2
     err = capsys.readouterr().err
     assert err.startswith(f"{mutate.SINKS_MALFORMED.code}: ") and "larger than 64 bytes" in err
 
@@ -1288,8 +1148,7 @@ def test_a_deeply_nested_pyproject_is_a_coded_refusal(tmp_path, capsys, monkeypa
     monkeypatch.setattr(shared.tomllib, "loads", too_deep)
     root = sinks_root(tmp_path, "[tool.mutation]\nmessage_sinks = []\n")
     path = declared_report(tmp_path, None)
-    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", "--root",
-                       str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", str(root)]) == 2
     err = capsys.readouterr().err
     assert err.startswith(f"{mutate.SINKS_MALFORMED.code}: ") and "nested too deeply" in err
 
@@ -1298,8 +1157,7 @@ def test_a_missing_pyproject_is_a_coded_refusal(tmp_path, capsys):
     root = tmp_path / "empty"
     root.mkdir()
     path = declared_report(tmp_path, None)
-    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", "--root",
-                       str(root)]) == 2
+    assert ticks.main(["--report", str(path), "--tick", "/nonexistent", str(root)]) == 2
     assert capsys.readouterr().err.startswith(f"{mutate.SINKS_MALFORMED.code}: ")
 
 

@@ -35,3 +35,6 @@ allow-direct-references = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=bakobo_mutate --cov-branch --cov-report=term-missing --cov-fail-under=100"
+markers = [
+    "integration: drives the real mutmut 3.8.0 on a toy project; runs by default, needs uv",
+]

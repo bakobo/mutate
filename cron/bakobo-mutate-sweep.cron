@@ -1,0 +1,12 @@
+# Weekly mutation staleness sweep: every Monday at 06:17 local time, bakobo-mutate sweep files,
+# updates or closes one mutation-stale tick in each enrolled repo's own ledger.
+#
+# Install it by appending this file to your crontab (crontab -l lists what is there first):
+#     (crontab -l 2>/dev/null; cat cron/bakobo-mutate-sweep.cron) | crontab -
+# Enrol repos with `bakobo-mutate enroll` in each one; the sweep reads
+# $XDG_CONFIG_HOME/bakobo-mutate/repos (default ~/.config/bakobo-mutate/repos).
+#
+# cron starts with a minimal PATH, so the line names the installed tool by absolute path and
+# puts ~/.local/bin first for the git, uv and tick it calls. Its output goes to
+# ~/.local/state/bakobo-mutate/sweep.log.
+17 6 * * 1 mkdir -p "$HOME/.local/state/bakobo-mutate" && PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" $HOME/.local/bin/bakobo-mutate sweep >> "$HOME/.local/state/bakobo-mutate/sweep.log" 2>&1

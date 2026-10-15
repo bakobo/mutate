@@ -7,6 +7,7 @@ and the bounded reading of a report someone else produced (``read_report``).
 from __future__ import annotations
 
 import ast
+import copy
 import io
 import json
 import keyword
@@ -15,7 +16,7 @@ import tokenize
 import tomllib
 from pathlib import Path
 
-SCHEMA = "bakobo.mutation-report/1"
+SCHEMA = "bakobo.mutation-report/2"
 # The most a report may hold before it is refused unread: 16 MiB. A report is one record
 # per surviving mutant, around a kilobyte each, so this allows thousands of survivors while
 # keeping a corrupt or hostile artifact from being loaded whole.
@@ -23,6 +24,7 @@ MAX_REPORT_BYTES = 16 * 1024 * 1024
 
 BEHAVIOURAL = "behavioural"
 STRING_ONLY = "string-only"
+DIAGNOSTIC = "diagnostic"
 # Tokens whose text is a string literal's content.
 STRING_TOKENS = {tokenize.STRING, tokenize.FSTRING_MIDDLE, tokenize.TSTRING_MIDDLE}
 # Tokens that carry no meaning a mutation could change.
@@ -42,23 +44,36 @@ OPEN_BRACKET = "unexpected EOF in multi-line statement"
 
 # A repo may declare more message sinks than the built-in ones, in pyproject.toml:
 #     [tool.mutation]
-#     message_sinks = ["Refusal.missing", "Note"]
+#     message_sinks = ["Refusal.missing", "Note", "console.out.write()"]
 # ``Name`` makes every string argument of a call spelled exactly ``Name(...)`` message text;
-# ``Name.kwarg`` makes only that keyword argument so. A survivor whose literal reached one is
-# recorded with the sink ``declared <entry>``.
+# ``Name.kwarg`` makes only that keyword argument so; and ``a.b.c()``, a dotted callee of any
+# length followed by ``()``, makes every string argument of a call spelled exactly
+# ``a.b.c(...)`` message text. A survivor whose literal reached one is recorded with the sink
+# ``declared <entry>``.
 # pyproject.toml is read at most this far, 1 MiB, and refused unread beyond it.
 MAX_PYPROJECT_BYTES = 1024 * 1024
 DECLARED = "declared "
 DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 
 
+CALLEE = "()"
+
+
+def _name(part: str) -> bool:
+    return part.isidentifier() and not keyword.iskeyword(part)
+
+
 def sink_entry(entry: object) -> bool:
-    """Whether ``entry`` is Name or Name.kwarg: one or two identifiers, neither a keyword."""
+    """Whether ``entry`` is Name, Name.kwarg, or a dotted callee followed by ``()``.
+
+    Every dotted part must be an identifier and not a keyword.
+    """
     if not isinstance(entry, str):
         return False
+    if entry.endswith(CALLEE):
+        return all(_name(part) for part in entry.removesuffix(CALLEE).split("."))
     parts = entry.split(".")
-    return len(parts) <= 2 and all(
-        part.isidentifier() and not keyword.iskeyword(part) for part in parts)
+    return len(parts) <= 2 and all(_name(part) for part in parts)
 
 
 class SinkConfigError(Exception):
@@ -79,8 +94,8 @@ def message_sinks(pyproject: dict) -> tuple[str, ...]:
     for entry in sinks:
         if not sink_entry(entry):
             raise SinkConfigError(
-                f"[tool.mutation] message_sinks holds {entry!r}, which is neither Name nor "
-                "Name.kwarg")
+                f"[tool.mutation] message_sinks holds {entry!r}, which is not Name, "
+                "Name.kwarg or a dotted.callee()")
     return tuple(sinks)
 
 
@@ -242,6 +257,10 @@ def _sink_of_call(call: ast.Call, parent: ast.AST | None, kwarg: str | None,
             return f"{owner}.{method}"
     callee = ast.unparse(func)
     for sink in sinks:
+        if sink.endswith(CALLEE):
+            if callee == sink.removesuffix(CALLEE):
+                return DECLARED + sink
+            continue
         name, _, keyword = sink.partition(".")
         if callee == name and (not keyword or keyword == kwarg):
             return DECLARED + sink
@@ -314,3 +333,210 @@ def message_sink(source: str, first: int, last: int,
     if not found or None in found or len(set(found)) > 1:
         return None  # a literal that is no message, or two sinks, neither vouching for both
     return found[0]
+
+
+
+class _MaskRaiseArguments(ast.NodeTransformer):
+    """Blank what a raise's constructed exception is given, and its from-cause.
+
+    The callee stays, and so does whether there is a cause, so a mutation that changes which
+    exception is raised, or drops the cause, still shows up as a difference.
+    """
+
+    def visit_Raise(self, node: ast.Raise) -> ast.Raise:
+        if isinstance(node.exc, ast.Call):
+            node.exc.args, node.exc.keywords = [], []
+        if node.cause is not None:
+            node.cause = ast.Constant(value=...)
+        return node
+
+
+def _masked(tree: ast.AST) -> str:
+    return ast.dump(_MaskRaiseArguments().visit(tree))
+
+
+def _placeholder_in(node: ast.AST, marks: str) -> bool:
+    """Whether any str constant under ``node`` holds one of the characters in ``marks``."""
+    return any(isinstance(n, ast.Constant) and isinstance(n.value, str)
+               and any(mark in n.value for mark in marks) for n in ast.walk(node))
+
+
+def _is_format_call(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "format")
+
+
+def _text_flows(node: ast.AST, name: str, value: ast.AST, other: ast.AST) -> bool:
+    """Whether a str in field ``name`` of ``node`` still reaches the argument as message text.
+
+    It does as either operand of ``+``, as an f-string's literal part, as the left of ``%``
+    when it holds no ``%``, and as the receiver of ``.format`` when it holds no brace. The
+    right of ``%`` and the arguments of ``.format`` are values being formatted (``"%c" % "A"``
+    works and ``"%c" % "AA"`` raises), and a format string's placeholders can make the
+    formatting itself fail, so none of those is text.
+    """
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return name == "left" and not (_placeholder_in(value, "%")
+                                       or _placeholder_in(other, "%"))
+    if _is_format_call(node):
+        return name == "func"
+    if isinstance(node, ast.Attribute) and node.attr == "format" and name == "value":
+        return not (_placeholder_in(value, "{}") or _placeholder_in(other, "{}"))
+    return isinstance(node, ast.JoinedStr)
+
+
+def _only_text(old: object, new: object, text: bool = True) -> bool:
+    """Whether two subtrees are the same but for the values of str constants that are text.
+
+    ``text`` says whether a str here reaches the raise's argument as message text (see
+    ``_text_flows``); a str anywhere else, a key, a call's argument, a format spec, must not
+    change at all.
+    """
+    if isinstance(old, list) and isinstance(new, list):
+        return len(old) == len(new) and all(
+            _only_text(a, b, text) for a, b in zip(old, new, strict=True))
+    if not (isinstance(old, ast.AST) and isinstance(new, ast.AST)):
+        return old == new
+    if type(old) is not type(new):
+        return False
+    if text and isinstance(old, ast.Constant) and isinstance(old.value, str) and isinstance(
+            new.value, str):  # type: ignore[attr-defined]  # new is a Constant too
+        return True
+    for name, value in ast.iter_fields(old):
+        other = getattr(new, name)
+        inner = text and _text_flows(old, name, value, other)
+        if not _only_text(value, other, inner):
+            return False
+    return True
+
+
+def _bound(raise_: ast.Raise, parents: dict) -> set[str]:
+    """Names that cannot be unbound where ``raise_`` runs.
+
+    A candidate is a parameter of the enclosing function, or the name of the innermost
+    enclosing ``except ... as name`` whose body holds the raise. An except clause deletes its
+    name when it ends and ``del`` deletes one outright, so a candidate is dropped when the
+    function deletes it anywhere or any other except clause in it binds the same name.
+    """
+    names: set[str] = set()
+    handlers: dict[str, ast.ExceptHandler] = {}
+    node: ast.AST = raise_
+    scope: ast.AST | None = None
+    while (parent := parents.get(node)) is not None:
+        if isinstance(parent, ast.ExceptHandler) and parent.name and node in parent.body:
+            handlers.setdefault(parent.name, parent)
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = parent.args
+            names.update(a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs])
+            names.update(a.arg for a in (args.vararg, args.kwarg) if a is not None)
+            scope = parent
+            break
+        node = parent
+    if scope is None:
+        return set()
+    names.update(handlers)
+    for inner in ast.walk(scope):
+        if isinstance(inner, ast.Delete):
+            names.difference_update(t.id for t in inner.targets if isinstance(t, ast.Name))
+        elif isinstance(inner, ast.ExceptHandler) and inner.name in names and (
+                handlers.get(inner.name) is not inner):
+            names.discard(inner.name)
+    return names
+
+
+def _is_none(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and node.value is None
+
+
+def _inert_raise(old: ast.Raise, new: ast.Raise, bound: set[str]) -> bool:
+    """Every difference between two raises that mask equal lies in an inert change."""
+    if isinstance(old.exc, ast.Call):
+        was, call = old.exc, new.exc
+        assert isinstance(call, ast.Call)  # the masks are equal, so the callee is too
+        if len(was.args) != len(call.args):
+            return False
+        for a, b in zip(was.args, call.args, strict=True):
+            if not _only_text(a, b):
+                return False
+        # A constructor's keywords are its own contract, invisible here: one dropped, or made
+        # None, can make the construction itself raise, so only their text may change.
+        if [k.arg for k in was.keywords] != [k.arg for k in call.keywords] or not all(
+                _only_text(a.value, b.value)
+                for a, b in zip(was.keywords, call.keywords, strict=True)):
+            return False
+    if old.cause is not None:
+        assert new.cause is not None  # the masks are equal, so a cause is still there
+        return _only_text(old.cause, new.cause) or (
+            _is_none(new.cause) and isinstance(old.cause, ast.Name) and old.cause.id in bound)
+    return True
+
+
+def _indent(line: str) -> str:
+    return line[:len(line) - len(line.lstrip())]
+
+
+def diagnostic(source: str, line: int, removed: list[str], added: list[str]) -> bool:
+    """Whether the mutation changes only what a raise's exception says, not which one escapes.
+
+    The mutation is applied to the source (mutmut's diff of a method is dedented, so the file's
+    own indentation is restored), both versions are parsed, and they must differ and become
+    identical once every raise's constructor arguments and from-cause are blanked. Anything
+    that cannot be checked that way, a fragment that is not the source, a mutant that does not
+    parse, a mutation that removes nothing, is not vouched for.
+
+    Lying inside the arguments is not enough: ``ValueError(1 / 0)`` raises ZeroDivisionError and
+    ``ValueError(1 * 0)`` raises ValueError. So each raise is paired with the one in the same
+    position in the mutant, and every difference between them must be inert: (a) the value of a
+    str constant changed that is the argument itself, or reaches it only as an operand of ``+``,
+    an f-string's literal part, the left of ``%`` holding no ``%``, or the receiver of
+    ``.format`` holding no brace (``_text_flows``); a str that is a key, a call's argument, a
+    format spec, the right of ``%`` or an argument of ``.format`` is behaviour: ``d["k"]``,
+    ``int("3")`` and ``"%c" % "A"`` raise differently when it changes; or (b) the cause became
+    the constant None where it was a bare name that cannot be unbound there, a parameter of the
+    enclosing function or the name the innermost enclosing ``except`` binds, which that
+    function never deletes nor binds in another except clause (``_bound``). An argument or a
+    keyword made None, or a keyword dropped, is never inert: evaluating the original could have
+    raised (``x.y`` on an object without ``y``), the constructor may choose its class from it
+    (``OSError(2, ...)`` builds FileNotFoundError), and a constructor's contract, even which
+    class a bare name refers to, is invisible here. Any other difference, an operator, a number,
+    a name, a call, an attribute, a subscript, a changed count of arguments, is behavioural.
+    This leans behavioural on purpose: most survivors inside an exception's arguments stay
+    behavioural and become ticks.
+    """
+    lines = source.splitlines()
+    end = line - 1 + len(removed)
+    if not removed or line < 1 or end > len(lines):
+        return False
+    original = lines[line - 1:end]
+    if [text.strip() for text in original] != [text.strip() for text in removed]:
+        return False
+    file_ws, diff_ws = _indent(original[0]), _indent(removed[0])
+    if not file_ws.endswith(diff_ws):
+        return False
+    pad = file_ws[:len(file_ws) - len(diff_ws)]
+    mutated = lines[:line - 1] + [pad + text for text in added] + lines[end:]
+    try:
+        before, after = ast.parse(source), ast.parse("\n".join(mutated))
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    if ast.dump(before) == ast.dump(after):
+        return False
+    if _masked(copy.deepcopy(before)) != _masked(copy.deepcopy(after)):
+        return False
+    # The masks are equal, so both hold the same raises in the same places.
+    parents = {child: node for node in ast.walk(before) for child in ast.iter_child_nodes(node)}
+    old = [n for n in ast.walk(before) if isinstance(n, ast.Raise)]
+    new = [n for n in ast.walk(after) if isinstance(n, ast.Raise)]
+    return all(_inert_raise(a, b, _bound(a, parents)) for a, b in zip(old, new, strict=True))
+
+
+def survivor_class(source: str | None, line: int, removed: list[str], added: list[str],
+                   sink: str | None) -> str:
+    """string-only, else diagnostic, else behavioural; without the source, never diagnostic."""
+    if classify(removed, added, sink) == STRING_ONLY:
+        return STRING_ONLY
+    if source is not None and diagnostic(source, line, removed, added):
+        return DIAGNOSTIC
+    return BEHAVIOURAL

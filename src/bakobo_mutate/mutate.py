@@ -1,32 +1,41 @@
-"""Mutation-test the source modules the default branch changed recently, and report survivors.
+"""Mutation-test what has landed on a repo's default branch, re-testing only what changed.
 
 Branch coverage says a line ran under some test; a surviving mutant says no test would notice
 that line being wrong.
 
-    bakobo-mutate run [--since "7 days ago"] [--ref HEAD]
-        [--module src/<pkg>/x.py ...] [--budget-minutes 300] [--out mutation-out]
+    bakobo-mutate run [TARGET] [--module src/<pkg>/x.py ...] [--since "7 days ago"]
+        [--all-survivors | --no-survivors] [--chunk 400]
 
-Which modules: every ``.py`` file under ``[tool.mutmut].source_paths`` that a first-parent
-commit on ``--ref`` touched since ``--since``, minus anything ``[tool.mutmut].do_not_mutate``
-excludes. ``--module`` names the files explicitly instead, for a local run. ``mutmut`` itself
-reads the rest of its configuration (the pytest arguments) from ``pyproject.toml``.
+TARGET is the repo, by default the one around the current directory. A run takes the
+machine-wide lock (``lock``), refreshes the target's persistent checkout at
+``.worktrees/mutation`` to ``origin/<default>`` and syncs its environment (``checkout``), and
+chooses its modules (``scope``): those named with ``--module``, else those stale since the last
+run, else, before any run, those a first-parent commit touched since ``--since``. It then runs
+the checkout's own mutmut once to generate mutants, which keeps every cached verdict whose
+function did not change, and once more per chunk of names for exactly the mutants that need
+running (``meta``): the ones in scope with no verdict yet and, unless ``--no-survivors``, every
+survivor and "no tests" verdict anywhere, since re-running them is the only way a newly added
+test is noticed.
 
-Writes ``<out>/mutation-report.json`` (one record per surviving mutant) and
-``<out>/summary.md``. Exits 0 whether or not any mutant survived, including when nothing
-changed or the time budget ran out; exits 2 only when the run itself could not be carried out —
-mutmut crashed, or the unmutated suite failed — because a harness failure that reported success
-would look exactly like a clean run.
+It writes ``report.json`` (one record per surviving mutant), ``summary.md``, ``mutmut-run.log``
+and ``stamp.json`` to ``<TARGET>/.ignored/mutation/``; a run that fails leaves the previous
+``stamp.json`` as it was, while an interrupted one still writes it. It exits 0 whether or not
+any mutant survived; 130 when interrupted, after reporting what finished, since mutmut saves
+each verdict as it completes and the next run starts where this one stopped; and 2 when the run
+could not be carried out or was refused, because a harness failure that reported success would
+look exactly like a clean run.
 
 Each record's ``class`` is ``string-only`` when the mutation changes nothing but the text inside
-string literals that are message text, which is counted rather than ticked,
-and ``behavioural`` otherwise. A literal is message text only when ``message_sink`` traces it,
-in the source, into an exception constructor in a ``raise``, a ``print``, a logging call,
-``warnings.warn``, or a sink the repo declares as ``[tool.mutation] message_sinks`` in
-pyproject.toml (``Name`` or ``Name.kwarg``, see ``shared.message_sinks``); the record carries
-that sink as ``message_sink``, null when there is none. A malformed declaration fails the run
-with ``SINKS_MALFORMED`` before mutmut starts.
-``classify`` decides from the diff and that sink, and leans behavioural whenever it cannot vouch
-for the change.
+string literals that are message text; ``diagnostic`` when it lies wholly inside the arguments
+of the exception a ``raise`` constructs, or that raise's ``from`` cause, and is inert there
+(``shared.diagnostic``), so the refusal stands and only what it says changes; and
+``behavioural`` otherwise. The first two are counted rather than ticked. A literal is message
+text only when ``message_sink`` traces it, in the source, into an exception constructor in a
+``raise``, a ``print``, a logging call, ``warnings.warn``, or a sink the repo declares as
+``[tool.mutation] message_sinks`` in pyproject.toml (see ``shared.message_sinks``); the record
+carries that sink as ``message_sink``, null when there is none. A malformed declaration fails
+the run with ``SINKS_MALFORMED`` before mutmut starts. ``classify`` decides from the diff and
+that sink, and leans behavioural whenever it cannot vouch for the change.
 
 A record's ``id`` is a digest of the file, the function and the mutated text, with no line
 number or mutmut ordinal in it, so the same surviving mutation keeps its id across runs while
@@ -34,7 +43,7 @@ the code around it moves. Two identical mutations in one function are told apart
 occurrence of the mutated line they sit on, counted in the source, so an id never depends on
 which of them happened to survive. ``bakobo-mutate ticks`` dedupes on it.
 
-A failed run carries one of the two codes below, ``failure_code``, whether retrying can help
+A failed run carries its code as ``failure_code``, whether retrying can help
 (``failure_retryable``), and the code's ``failure_hint``, in the report and its summary.
 """
 
@@ -42,34 +51,42 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import datetime
-import fnmatch
 import hashlib
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from bakobo.errors import BakoboError, ErrorCode  # type: ignore[import-untyped]
 
+from . import checkout, lock, meta, scope
 from .shared import (
     BEHAVIOURAL,
+    DIAGNOSTIC,
     SCHEMA,
     STRING_ONLY,
     SinkConfigError,
-    classify,
     message_sink,
     message_sinks,
     read_pyproject,
+    survivor_class,
 )
 
 PASSED = "passed: every test covering this function passed with the mutant in place"
 STRING_NOTE = "only the text of a message literal changed; counted, not ticked"
+DIAGNOSTIC_NOTE = ("only what a raised exception is given changed, not whether it is raised; "
+                   "counted, not ticked")
+NOTHING_NEEDED = ("Nothing needed running: every mutant in scope already has a verdict, and "
+                  "no survivor is to be re-checked.")
+INTERRUPTED_NOTE = ("The run was interrupted. Mutants still marked 'not checked' were never "
+                    "run; the next run starts with them, and every verdict saved before the "
+                    "interrupt is kept.")
+INTERRUPTED = 130  # the shell's exit status for a process stopped by SIGINT
 
 RUN_FAILED = ErrorCode(
     code="e.env.mutmut-run.f",
@@ -80,9 +97,9 @@ RUN_FAILED = ErrorCode(
     ),
     args=("exit_code", "tail"),
     hint=(
-        "Run the suite on the same commit with the [tool.mutmut] pytest arguments: mutmut "
-        "needs it to pass unmutated, and running the workflow again on this commit will fail "
-        "the same way."
+        "Run the target's suite in .worktrees/mutation with the [tool.mutmut] pytest "
+        "arguments: mutmut needs it to pass unmutated, and running bakobo-mutate run again on "
+        "this commit will fail the same way."
     ),
 )
 RESULTS_UNREADABLE = ErrorCode(
@@ -91,8 +108,8 @@ RESULTS_UNREADABLE = ErrorCode(
     detail="mutmut {command} exited {exit_code} while its results were being read: {stderr}",
     args=("command", "exit_code", "stderr"),
     hint=(
-        "Run the workflow again. If it fails the same way, run that mutmut command in a local "
-        "checkout of the commit, where its full error is visible."
+        "Run bakobo-mutate run again. If it fails the same way, run that mutmut command in "
+        ".worktrees/mutation, where its full error is visible."
     ),
 )
 SINKS_MALFORMED = ErrorCode(
@@ -102,18 +119,21 @@ SINKS_MALFORMED = ErrorCode(
     args=("problem",),
     hint=(
         "Fix [tool.mutation] message_sinks in pyproject.toml: each entry is a callable's name, "
-        "Name, or that name and one keyword argument, Name.kwarg. Running again before then "
-        "will fail the same way."
+        "Name; that name and one keyword argument, Name.kwarg; or a dotted callee followed by "
+        "(), such as console.out.write(). Running again before then will fail the same way."
     ),
 )
 # mutmut mangles a method name with U+01C1 (LATIN LETTER LATERAL CLICK) as its separator:
 # x<sep>Class<sep>method. Spelled as an escape so no reader mistakes it for two pipes.
-METHOD_SEP = "\u01c1"
+METHOD_SEP = "ǁ"
 NOTHING_MATCHES = "Filtered for specific mutants, but nothing matches"
 CLEAN_TEST_FAILED = "Failed to run clean test"
+# A name no mutant can have: mutmut generates every mutant, then refuses to run it, which is
+# how mutants are generated without calling mutmut's private API.
+GENERATE_ONLY = "__bakobo_mutate_generate_only__"
 # Seconds mutmut gets to stop its workers after SIGTERM before the group is killed outright.
 TERM_GRACE = 30
-
+TAIL = 15
 
 
 @dataclass
@@ -153,15 +173,13 @@ class Survivor:
 class Outcome:
     modules: list[str]
     complete: bool = True
+    interrupted: bool = False
+    generated: bool = False
     failure: BakoboError | None = None
     note: str | None = None
     counts: dict[str, int] = field(default_factory=dict)
     survivors: list[Survivor] = field(default_factory=list)
-
-
-def load_config(root: Path) -> dict:
-    data = tomllib.loads((root / "pyproject.toml").read_text("utf-8"))
-    return data.get("tool", {}).get("mutmut", {})
+    verdicts: meta.Verdicts | None = None
 
 
 def declared_sinks(root: Path) -> tuple[str, ...]:
@@ -172,54 +190,10 @@ def declared_sinks(root: Path) -> tuple[str, ...]:
         raise SINKS_MALFORMED(problem=str(error)) from None
 
 
-def changed_modules(root: Path, ref: str, since: str, cfg: dict, git: str = "git") -> list[str]:
-    """Source files a first-parent commit on ``ref`` touched since ``since`` that still exist.
-
-    ``--diff-merges=first-parent`` makes a merge commit list what the merge brought onto the
-    branch, so a pull request whose own commits are older than the window still counts on the
-    day it landed.
-    """
-    sources = cfg.get("source_paths", ["src"])
-    out = subprocess.run(
-        [git, "log", "--first-parent", "--diff-merges=first-parent", f"--since={since}",
-         "--name-only", "--format=", ref, "--", *sources],
-        cwd=root, capture_output=True, text=True, check=True,
-    ).stdout
-    paths = {line.strip() for line in out.splitlines() if line.strip()}
-    return sorted(p for p in paths if p.endswith(".py") and (root / p).is_file()
-                  and not excluded(p, cfg))
-
-
-def excluded(path: str, cfg: dict) -> bool:
-    return any(fnmatch.fnmatch(path, pattern) for pattern in cfg.get("do_not_mutate", []))
-
-
 def module_name(path: str) -> str:
     """The dotted name mutmut gives a source file (mutmut's format_utils.get_mutant_name)."""
     name = path.removesuffix(".py").replace("/", ".").removeprefix("src.")
     return name.removesuffix(".__init__")
-
-
-def globs_for(path: str) -> list[str]:
-    """Patterns selecting this module's mutants and no submodule's.
-
-    Every mutant name is ``<module>.x_<function>`` or ``<module>.x<sep><Class><sep><method>``,
-    so a pattern ending in ``.x_*`` cannot match ``<module>.<submodule>.x_*`` (fnmatch's ``*``
-    crosses dots, which is why the bare ``<module>.*`` is not used).
-    """
-    mod = module_name(path)
-    return [f"{mod}.x_*", f"{mod}.x{METHOD_SEP}*"]
-
-
-def has_functions(source: str) -> bool:
-    """Whether mutmut could mutate anything here: it mutates functions and methods only."""
-    funcs = (ast.FunctionDef, ast.AsyncFunctionDef)
-    for node in ast.parse(source).body:
-        if isinstance(node, funcs):
-            return True
-        if isinstance(node, ast.ClassDef) and any(isinstance(n, funcs) for n in node.body):
-            return True
-    return False
 
 
 def function_of(mutmut_name: str, path: str) -> str:
@@ -323,54 +297,42 @@ def mutant_id(path: str, function: str, removed: list[str], added: list[str],
     return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
-def run_mutmut(mutmut: str, globs: list[str], budget: float, log: Path,
-               root: Path) -> tuple[int | None, str]:
-    """Run mutmut in its own process group; on budget exhaustion stop the whole group.
-
-    Returns (exit code, or None if the budget ran out; combined output).
-    """
-    with log.open("w") as sink:
-        proc = subprocess.Popen([mutmut, "run", *globs], cwd=root, stdout=sink,
-                                stderr=subprocess.STDOUT, start_new_session=True)
-        try:
-            code: int | None = proc.wait(timeout=budget)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGTERM)
-            try:
-                proc.wait(timeout=TERM_GRACE)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
-            code = None
-    return code, log.read_text(errors="replace")
-
-
-def statuses(mutmut: str, root: Path) -> dict[str, str]:
-    out = subprocess.run([mutmut, "results", "--all", "true"], cwd=root, capture_output=True,
-                         text=True, check=True).stdout
-    result = {}
-    for line in out.splitlines():
-        name, sep, status = line.strip().rpartition(": ")
-        if sep and "__mutmut_" in name:
-            result[name] = status
-    return result
-
-
-def nothing_to_run(mutmut: str, root: Path, code: int, output: str, globs: list[str]) -> bool:
-    """Whether a non-zero exit means only that the changed modules have no mutants.
-
-    mutmut says so by failing an assertion (exit 1) whose text is NOTHING_MATCHES, but that
-    text proves nothing on its own: it can sit in the same output as a failed clean-test run.
-    So the claim is accepted only with positive evidence from mutmut's own record, that it
-    holds no mutant at all matching the changed modules. Anything else is a failed run.
-    """
-    if code != 1 or NOTHING_MATCHES not in output or CLEAN_TEST_FAILED in output:
-        return False
+def _stop(proc: subprocess.Popen) -> None:
+    """Stop mutmut's whole process group: SIGTERM, then SIGKILL after TERM_GRACE seconds."""
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGTERM)
     try:
-        names = statuses(mutmut, root)
-    except subprocess.CalledProcessError:
-        return False
-    return not any(fnmatch.fnmatch(name, g) for name in names for g in globs)
+        proc.wait(timeout=TERM_GRACE)
+    except (subprocess.TimeoutExpired, KeyboardInterrupt):
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+
+
+def run_mutmut(mutmut: str, names: list[str], log: Path, cwd: Path) -> tuple[int | None, str]:
+    """``mutmut run <names>`` in its own process group, its output appended to ``log``.
+
+    Returns (exit code, or None if it was interrupted; this call's output). An interrupt,
+    Ctrl-C or the SIGTERM ``main`` turns into one, stops the whole group; every verdict mutmut
+    saved before then stays saved.
+    """
+    with log.open("a") as sink:
+        start = sink.tell()
+        proc = subprocess.Popen([mutmut, "run", *names], cwd=cwd, stdout=sink,
+                                stderr=subprocess.STDOUT, start_new_session=True,
+                                env=checkout.clean_env())
+        try:
+            code: int | None = proc.wait()
+        except KeyboardInterrupt:
+            _stop(proc)
+            code = None
+    with log.open(errors="replace") as text:
+        text.seek(start)
+        return code, text.read()
+
+
+def _failed(code: int, output: str) -> BakoboError:
+    return RUN_FAILED(exit_code=code, tail="\n".join(output.splitlines()[-TAIL:]))
 
 
 def survivor(mutmut: str, root: Path, name: str, path: str,
@@ -391,42 +353,68 @@ def survivor(mutmut: str, root: Path, name: str, path: str,
         mutmut_name=name, file=path, line=line,
         function=function, removed=removed, added=added, diff=diff,
         tests=len([t for t in tests.splitlines() if t.strip()]),
-        kind=classify(removed, added, sink), sink=sink,
+        kind=survivor_class(source, line, removed, added, sink), sink=sink,
     )
 
 
-def mutate(root: Path, modules: list[str], mutmut: str, budget: float, out: Path,
-           sinks: tuple[str, ...] = ()) -> Outcome:
-    outcome = Outcome(modules=modules)
-    if not modules:
-        outcome.note = "No source module changed in the window, so there was nothing to mutate."
-        return outcome
-    mutable = [m for m in modules if has_functions((root / m).read_text("utf-8"))]
-    if not mutable:
-        outcome.note = "The changed modules define no functions or methods, which is all " \
-                       "mutmut mutates."
-        return outcome
-    globs = [g for m in mutable for g in globs_for(m)]
-    code, output = run_mutmut(mutmut, globs, budget, out / "mutmut-run.log", root)
-    if code is None:
-        outcome.complete = False
-        outcome.note = f"The {budget / 60:.0f}-minute budget ran out; mutants still marked " \
-                       "'not checked' were never run."
-    elif code != 0:
-        if nothing_to_run(mutmut, root, code, output, globs):
-            outcome.note = "mutmut generated no mutants for the changed modules."
-            return outcome
-        outcome.failure = RUN_FAILED(exit_code=code, tail="\n".join(output.splitlines()[-15:]))
-        return outcome
-    owner = {g: m for m in mutable for g in globs_for(m)}
+@dataclass
+class Plan:
+    modules: list[str]
+    survivors: bool = True
+    chunk: int = 400
+    sinks: tuple[str, ...] = ()
+
+
+def _interrupted(outcome: Outcome) -> None:
+    outcome.complete = False
+    outcome.interrupted, outcome.note = True, INTERRUPTED_NOTE
+
+
+def _run_needed(wt: Path, plan: Plan, mutmut: str, log: Path, verdicts: meta.Verdicts,
+                outcome: Outcome) -> None:
+    """Run the needed mutants chunk by chunk; an interrupt anywhere here stops the run."""
     try:
-        for name, status in sorted(statuses(mutmut, root).items()):
-            path = next((owner[g] for g in owner if fnmatch.fnmatch(name, g)), None)
-            if path is None:
-                continue
-            outcome.counts[status] = outcome.counts.get(status, 0) + 1
-            if status == "survived":
-                outcome.survivors.append(survivor(mutmut, root, name, path, sinks))
+        names = meta.names(verdicts, meta.needed(verdicts, set(plan.modules), plan.survivors))
+        if not names:
+            outcome.note = NOTHING_NEEDED
+        for chunk in meta.chunks(names, plan.chunk):
+            code, output = run_mutmut(mutmut, chunk, log, wt)
+            if code is None:
+                _interrupted(outcome)
+                return
+            if code != 0:
+                outcome.failure = _failed(code, output)
+                return
+    except KeyboardInterrupt:
+        _interrupted(outcome)
+
+
+def mutate(wt: Path, plan: Plan, mutmut: str, log: Path) -> Outcome:
+    """Generate, run what is needed, and read back every verdict; never raises a BakoboError."""
+    outcome = Outcome(modules=plan.modules)
+    code, output = run_mutmut(mutmut, [GENERATE_ONLY], log, wt)
+    if code is None:
+        _interrupted(outcome)
+    elif code != 1 or NOTHING_MATCHES not in output or CLEAN_TEST_FAILED in output:
+        outcome.failure = _failed(code, output)
+        return outcome
+    else:
+        outcome.generated = True
+    try:
+        verdicts = meta.read_meta(wt)
+        if not outcome.interrupted:
+            _run_needed(wt, plan, mutmut, log, verdicts, outcome)
+        verdicts = meta.read_meta(wt)
+    except BakoboError as error:
+        outcome.failure = error
+        return outcome
+    outcome.verdicts = verdicts
+    outcome.counts = meta.counts(verdicts, plan.modules)
+    if not all(meta.complete(verdicts, plan.modules).values()):
+        outcome.complete = False
+    try:
+        for name, path in meta.survivors(verdicts):
+            outcome.survivors.append(survivor(mutmut, wt, name, path, plan.sinks))
     except subprocess.CalledProcessError as error:
         outcome.counts, outcome.survivors = {}, []
         outcome.failure = RESULTS_UNREADABLE(
@@ -451,7 +439,7 @@ def report(outcome: Outcome, cfg: dict, commit: str, since: str) -> dict:
         "note": outcome.note,
         "counts": outcome.counts,
         "classes": {kind: sum(s.kind == kind for s in outcome.survivors)
-                    for kind in (BEHAVIOURAL, STRING_ONLY)},
+                    for kind in (BEHAVIOURAL, STRING_ONLY, DIAGNOSTIC)},
         "survivors": [s.record(cfg.get("pytest_add_cli_args", [])) for s in outcome.survivors],
     }
 
@@ -462,9 +450,8 @@ def cell(text: str) -> str:
 
 
 def summary(data: dict) -> str:
-    scope = (f"Commit `{data['commit'][:12]}`; modules changed since {data['since']}: "
-             f"{len(data['modules'])}.")
-    lines = ["# Mutation testing (pilot)", "", scope, ""]
+    scope_line = f"Commit `{data['commit'][:12]}`; {data['since']}: {len(data['modules'])}."
+    lines = ["# Mutation testing", "", scope_line, ""]
     if data["failure"]:
         again = "may help" if data["failure_retryable"] else "will not help"
         lines += [f"**The run failed (`{data['failure_code']}`), so nothing below is a result."
@@ -479,8 +466,9 @@ def summary(data: dict) -> str:
     survivors = data["survivors"]
     if survivors:
         classes = data["classes"]
-        split = (f"{classes[BEHAVIOURAL]} behavioural, {classes[STRING_ONLY]} string-only "
-                 f"({STRING_NOTE}).")
+        split = (f"{classes[BEHAVIOURAL]} behavioural, {classes[STRING_ONLY]} string-only, "
+                 f"{classes[DIAGNOSTIC]} diagnostic. String-only: {STRING_NOTE}. Diagnostic: "
+                 f"{DIAGNOSTIC_NOTE}.")
         lines += [f"## {len(survivors)} surviving mutants", "", split, "",
                   "| id | class | where | function | mutation |", "|---|---|---|---|---|"]
         for s in survivors:
@@ -499,47 +487,105 @@ def summary(data: dict) -> str:
     return "\n".join(lines)
 
 
-def find_mutmut() -> str:
-    beside = Path(sys.executable).parent / "mutmut"
-    return str(beside) if beside.exists() else (shutil.which("mutmut") or "mutmut")
+def positive(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{text} is not a positive integer")
+    return value
 
 
-def main(argv: list[str] | None = None, prog: str | None = None) -> int:
+def parse(argv: list[str] | None, prog: str | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n\n")[0])
-    parser.add_argument("--root", type=Path, default=Path.cwd())
-    parser.add_argument("--ref", default="HEAD")
-    parser.add_argument("--since", default="7 days ago")
+    parser.add_argument("target", nargs="?", type=Path, default=None,
+                        help="the repo to mutate (default: the one around the current "
+                             "directory)")
     parser.add_argument("--module", action="append", default=[],
-                        help="mutate this file instead of the changed ones (repeatable)")
-    parser.add_argument("--budget-minutes", type=float, default=300)
-    parser.add_argument("--out", type=Path, default=Path("mutation-out"))
-    parser.add_argument("--mutmut", default=None, help="the mutmut executable")
+                        help="mutate this file instead of the stale ones (repeatable)")
+    parser.add_argument("--since", default="7 days ago",
+                        help="before any run, mutate modules changed since this git date")
+    survivors = parser.add_mutually_exclusive_group()
+    survivors.add_argument("--all-survivors", dest="survivors", action="store_true",
+                           default=True,
+                           help="re-check every survivor and every 'no tests' verdict "
+                                "anywhere (default)")
+    survivors.add_argument("--no-survivors", dest="survivors", action="store_false",
+                           help="re-check neither; run only what in scope has no verdict yet")
+    parser.add_argument("--chunk", type=positive, default=400,
+                        help="the most mutant names passed to one mutmut run")
+    parser.add_argument("--mutmut", default=None,
+                        help="the mutmut executable (default: the checkout's .venv/bin/mutmut)")
     parser.add_argument("--git", default="git")
-    args = parser.parse_args(argv)
+    parser.add_argument("--uv", default="uv")
+    return parser.parse_args(argv)
 
-    root = args.root.resolve()
-    out = args.out if args.out.is_absolute() else root / args.out
-    out.mkdir(parents=True, exist_ok=True)
-    commit = subprocess.run([args.git, "rev-parse", args.ref], cwd=root, capture_output=True,
-                            text=True, check=True).stdout.strip()
-    try:  # first, since a pyproject.toml that cannot declare sinks cannot be read for mutmut
-        sinks = declared_sinks(root)
-    except BakoboError as error:
-        cfg: dict = {}
-        outcome = Outcome(modules=sorted(args.module), failure=error)
-    else:
-        cfg = load_config(root)
-        modules = sorted(args.module) or changed_modules(root, args.ref, args.since, cfg,
-                                                         args.git)
-        outcome = mutate(root, modules, args.mutmut or find_mutmut(), args.budget_minutes * 60,
-                         out, sinks)
-    since = "an explicit module list" if args.module else args.since
+
+def write(out: Path, outcome: Outcome, cfg: dict, commit: str, since: str) -> None:
     data = report(outcome, cfg, commit, since)
-    (out / "mutation-report.json").write_text(json.dumps(data, indent=2) + "\n")
+    (out / "report.json").write_text(json.dumps(data, indent=2) + "\n")
     text = summary(data)
     (out / "summary.md").write_text(text)
     print(text)
-    return 2 if outcome.failure else 0
+
+
+def execute(target: Path, args: argparse.Namespace) -> int:
+    """One run against ``target``, under the lock; returns the exit status."""
+    wt, branch = checkout.ensure_checkout(target, args.git)
+    checkout.sync(wt, args.uv)
+    mutmut = checkout.find_mutmut(wt, args.mutmut)
+    ref = f"origin/{branch}"
+    commit = subprocess.run([args.git, "-C", str(target), "rev-parse", ref],
+                            capture_output=True, text=True, check=True).stdout.strip()
+    stamp = scope.read_stamp(target)
+    out = target / scope.REPORT_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    log = out / "mutmut-run.log"
+    log.write_text("")
+    try:  # first, since a pyproject.toml that cannot declare sinks cannot be read for mutmut
+        sinks = declared_sinks(wt)
+    except BakoboError as error:
+        write(out, Outcome(modules=[], failure=error), {}, commit,
+              "modules chosen before the run was refused")
+        return 2
+    cfg = scope.config_at(target, ref, args.git)
+    modules, since = scope.run_scope(target, ref, stamp, args.module, args.since, cfg,
+                                     args.git)
+    plan = Plan(modules=modules, survivors=args.survivors, chunk=args.chunk, sinks=sinks)
+    outcome = mutate(wt, plan, mutmut, log)
+    if outcome.verdicts is not None and outcome.failure is None:
+        # A failed run is no measurement, so the last stamp stands; an interrupted one is, as
+        # far as it got. A module with no mutants on record is complete only if generation
+        # finished.
+        done = {m: ok and outcome.generated
+                for m, ok in meta.complete(outcome.verdicts, modules).items()}
+        scope.write_stamp(target, scope.updated(stamp, done, commit,
+                                                advance_base=not args.module))
+    write(out, outcome, cfg, commit, since)
+    if outcome.failure:
+        return 2
+    return INTERRUPTED if outcome.interrupted else 0
+
+
+def _terminate(signum, frame):
+    raise KeyboardInterrupt
+
+
+def main(argv: list[str] | None = None, prog: str | None = None) -> int:
+    args = parse(argv, prog)
+    previous = signal.signal(signal.SIGTERM, _terminate)
+    try:
+        target = checkout.target_root(args.target or Path.cwd(), args.git)
+        scope.check_since(target, args.since, args.git)
+        with lock.machine_lock(target):
+            return execute(target, args)
+    except BakoboError as error:
+        print(f"{error.code}: {error.detail}\nHint: {error.hint}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("bakobo-mutate run was interrupted outside mutmut, so nothing was reported.",
+              file=sys.stderr)
+        return INTERRUPTED
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 if __name__ == "__main__":
