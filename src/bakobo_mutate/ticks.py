@@ -9,6 +9,7 @@ they become anyone's work.
 
 TARGET is the repo the report is about, by default the one around the current directory; its
 pyproject.toml declares its message sinks and its git holds the source the report names.
+Every ``tick`` runs in TARGET, so the ticks land in its ledger wherever this is run from.
 
 Each survivor becomes ``tick add --kind debt --tag mutation-survivor "<title>"`` followed by
 ``tick note <id> <detail>``. The title carries the survivor's stable id as ``[m:<id>]``, and the
@@ -170,14 +171,15 @@ def check_report(data: object) -> None:
                 f"survivor {index} in the report is malformed: {error}") from None
 
 
-def run(argv: list[str]) -> str:
-    return subprocess.run(argv, capture_output=True, text=True, check=True).stdout
+def run(argv: list[str], cwd: Path | None = None) -> str:
+    """``argv``'s output, run in ``cwd``: for tick, the target, whose ledger it then reads."""
+    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=True).stdout
 
 
-def ticked(tick: str) -> dict[str, str]:
+def ticked(tick: str, cwd: Path | None = None) -> dict[str, str]:
     """Mutant id to tick id, for every mutation-survivor tick, closed ones included."""
     found = {}
-    for line in run([tick, "ls", "--all", "--tag", TAG]).splitlines():
+    for line in run([tick, "ls", "--all", "--tag", TAG], cwd).splitlines():
         match = ID_IN_TITLE.search(line)
         if match:
             found.setdefault(match.group(1), line.split()[0])
@@ -239,9 +241,14 @@ class Sources:
 
 
 def file_ticks(data: dict, tick: str, dry_run: bool, sinks: tuple[str, ...] = (),
-               sources: Sources | None = None) -> tuple[list[str], int, int, dict[str, int]]:
-    """Returns (ids filed, count already ticked, count re-noted, counts by uncounted class)."""
-    have = ticked(tick)
+               sources: Sources | None = None,
+               cwd: Path | None = None) -> tuple[list[str], int, int, dict[str, int]]:
+    """Returns (ids filed, count already ticked, count re-noted, counts by uncounted class).
+
+    Every tick runs in ``cwd``, the target, so the ticks land in its ledger and not in the
+    ledger of whatever repo the caller stands in.
+    """
+    have = ticked(tick, cwd)
     done: set[str] = set()
     filed: list[str] = []
     skipped = renoted = 0
@@ -260,22 +267,22 @@ def file_ticks(data: dict, tick: str, dry_run: bool, sinks: tuple[str, ...] = ()
         done.add(s["id"])
         if s["id"] in have:
             tick_id = have[s["id"]]
-            if f"mutant-id: {s['id']}" in run([tick, "show", tick_id]):
+            if f"mutant-id: {s['id']}" in run([tick, "show", tick_id], cwd):
                 skipped += 1
             elif dry_run:
                 print(f"would re-note {tick_id}: {title(s)}")
                 renoted += 1
             else:
-                run([tick, "note", tick_id, detail(s, data)])
+                run([tick, "note", tick_id, detail(s, data)], cwd)
                 print(f"re-noted {tick_id}: {title(s)}")
                 renoted += 1
             continue
         if dry_run:
             print(f"would file: {title(s)}")
         else:
-            out = run([tick, "add", "--kind", "debt", "--tag", TAG, title(s)])
+            out = run([tick, "add", "--kind", "debt", "--tag", TAG, title(s)], cwd)
             tick_id = out.split()[0]
-            run([tick, "note", tick_id, detail(s, data)])
+            run([tick, "note", tick_id, detail(s, data)], cwd)
             print(f"filed {tick_id}: {title(s)}")
         filed.append(s["id"])
     return filed, skipped, renoted, quiet
@@ -322,7 +329,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         print(f"{error.code}: {error.detail}\nHint: {error.hint}", file=sys.stderr)
         return 1 if error.code in (NO_REPORT.code, FAILED_RUN.code) else 2
     sources = Sources(root, data["commit"])
-    filed, skipped, renoted, quiet = file_ticks(data, args.tick, args.dry_run, sinks, sources)
+    filed, skipped, renoted, quiet = file_ticks(data, args.tick, args.dry_run, sinks, sources,
+                                                 cwd=root)
     verb = "would file" if args.dry_run else "filed"
     print(f"{verb} {len(filed)}; {skipped} already ticked; {renoted} re-noted; "
           f"{quiet[STRING_ONLY]} string-only and {quiet[DIAGNOSTIC]} diagnostic survivors not "

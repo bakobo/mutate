@@ -18,6 +18,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from conftest import recorded, recorder
 
 from bakobo_mutate import mutate, shared, ticks
 
@@ -284,6 +285,24 @@ def test_ticks_reads_the_targets_own_report_by_default(sample, tmp_path, capsys)
     tick = tick_stub(tmp_path)
     assert ticks.main([str(root), "--tick", str(tick), "--dry-run"]) == 0
     assert "would file 2" in capsys.readouterr().out
+
+
+def test_every_tick_runs_in_the_target_not_the_callers_directory(sample, tmp_path,
+                                                                monkeypatch):
+    root = tmp_path / "target"
+    (root / ".ignored" / "mutation").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (root / ".ignored" / "mutation" / "report.json").write_text(sample.read_text())
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    tick = recorder(tmp_path / "rec", "tick", {
+        "ls": {"out": "2abc  debt   mutation survivor [m:aaaaaaaaaaaa] x.py:6 in f\n"},
+        "add": {"out": "4ghi  filed\n"}, "show": {"out": "title\n"}, "note": {}})
+    assert ticks.main([str(root), "--tick", str(tick)]) == 0
+    seen = recorded(tmp_path / "rec", "tick")
+    assert {c["argv"][0] for c in seen} == {"ls", "add", "note", "show"}
+    assert {c["cwd"] for c in seen} == {str(root)}
 
 
 def test_ticks_finds_the_target_around_the_cwd(sample, tmp_path, monkeypatch, capsys):
