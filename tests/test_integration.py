@@ -217,6 +217,27 @@ def test_a_new_killing_test_removes_its_survivor(toy):
     assert not survivors(target) & grow
 
 
+def test_a_test_file_the_repo_deleted_is_not_collected_again(toy):
+    # mutmut copies tests/ into mutants/ and never deletes from it. heti's first run failed on a
+    # deleted test that read a deleted file outside the copied tree, once mutmut ran the whole
+    # copied suite again to collect its stats; whether a run does that depends on mutmut's own
+    # bookkeeping, so the copy's absence is what is asserted.
+    target, seed = toy
+    (seed / "extra.txt").write_text("x")
+    (seed / "tests" / "test_extra.py").write_text(
+        "from pathlib import Path\n\n\ndef test_extra():\n"
+        "    assert (Path(__file__).resolve().parents[2] / 'extra.txt').exists()\n")
+    git(seed, "add", ".")
+    git(seed, "commit", "-q", "-m", "an extra test")
+    git(seed, "push", "-q", str(seed.parent / "origin.git"), "HEAD:main")
+    assert run(target, "--no-survivors") == 0
+    git(seed, "rm", "-q", "extra.txt", "tests/test_extra.py")
+    git(seed, "commit", "-q", "-m", "drop the extra test")
+    git(seed, "push", "-q", str(seed.parent / "origin.git"), "HEAD:main")
+    assert run(target, "--no-survivors", "--module", "src/toy/beta.py") == 0
+    assert not (wt(target) / "mutants" / "tests" / "test_extra.py").exists()
+
+
 def test_an_edited_function_alone_is_rerun_and_stale_tracks_it(toy, capsys):
     target, seed = toy
     run(target, "--no-survivors")

@@ -216,3 +216,69 @@ def test_a_checkout_without_mutmut_is_refused(tmp_path):
         checkout.find_mutmut(tmp_path, None)
     assert code_of(refused) == checkout.NO_MUTMUT.code == "e.state.missing.mutmut.f"
     assert "dependency group" in refused.value.hint
+
+
+# --- the mutants/ tree follows the checkout ---------------------------------------------------
+# mutmut copies tests/ and the source into mutants/ and never deletes from it, so a file the
+# repo removed would go on being collected there: heti's first run failed on a deleted test
+# that imported a deleted script.
+
+
+def tree(root, *paths):
+    for rel in paths:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x")
+
+
+def test_a_file_the_checkout_no_longer_has_is_pruned_from_mutants(tmp_path):
+    tree(tmp_path, "tests/test_kept.py", "src/pkg/kept.py", "pyproject.toml")
+    tree(tmp_path / "mutants", "tests/test_kept.py", "tests/test_gone.py", "src/pkg/kept.py",
+         "src/pkg/gone.py", "tests/data/gone.json", "pyproject.toml")
+    assert checkout.prune(tmp_path) == ["src/pkg/gone.py", "tests/data/gone.json",
+                                        "tests/test_gone.py"]
+    left = sorted(p.relative_to(tmp_path / "mutants").as_posix()
+                  for p in (tmp_path / "mutants").rglob("*") if p.is_file())
+    assert left == ["pyproject.toml", "src/pkg/kept.py", "tests/test_kept.py"]
+
+
+def test_verdicts_mutmuts_own_files_and_caches_are_kept(tmp_path):
+    tree(tmp_path / "mutants", "src/pkg/gone.py.meta", "mutmut-stats.json",
+         "tests/__pycache__/test_gone.cpython-314.pyc", ".pytest_cache/v/cache/nodeids",
+         ".hypothesis/examples/x")
+    assert checkout.prune(tmp_path) == []
+    assert len([p for p in (tmp_path / "mutants").rglob("*") if p.is_file()]) == 5
+
+
+def test_a_checkout_without_mutants_has_nothing_to_prune(tmp_path):
+    assert checkout.prune(tmp_path) == []
+
+
+def test_a_symlinked_mutants_directory_is_not_followed(tmp_path):
+    outside = tmp_path / "outside"
+    tree(outside, "precious.txt")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / "mutants").symlink_to(outside, target_is_directory=True)
+    # Refused, not skipped: mutmut would go on using the stale copies behind the link.
+    with pytest.raises(BakoboError) as excinfo:
+        checkout.prune(wt)
+    assert code_of(excinfo) == "e.state.conflict.mutation-mutants-link.f"
+    assert (outside / "precious.txt").exists()
+
+
+def test_only_mutmuts_own_stats_files_are_exempt_by_name(tmp_path):
+    # A copied test whose name merely starts with mutmut is still a test pytest would collect.
+    tree(tmp_path / "mutants", "mutmut-stats.json", "mutmut-cicd-stats.json", "mutmut_test.py")
+    assert checkout.prune(tmp_path) == ["mutmut_test.py"]
+
+
+def test_a_file_whose_counterpart_is_now_a_directory_is_pruned(tmp_path):
+    tree(tmp_path, "tests/helpers/__init__.py")
+    tree(tmp_path / "mutants", "tests/helpers")
+    assert checkout.prune(tmp_path) == ["tests/helpers"]
+
+
+def test_mutmuts_span_indexes_are_kept(tmp_path):
+    tree(tmp_path, "src/pkg/mod.py")
+    tree(tmp_path / "mutants", "src/pkg/mod.py", "src/pkg/mod.py.spans")
+    assert checkout.prune(tmp_path) == []

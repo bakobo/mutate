@@ -47,6 +47,13 @@ NOT_A_WORKTREE = ErrorCode(
     args=("path", "target"),
     hint="Move or delete that directory; the next run will create the checkout there.",
 )
+MUTANTS_LINKED = ErrorCode(
+    code="e.state.conflict.mutation-mutants-link.f",
+    title="The mutation checkout's mutants/ is a symlink, so it was not pruned or used.",
+    detail="{path} points elsewhere; pruning through it could delete files outside the checkout.",
+    args=("path",),
+    hint="Delete that link; the next run creates mutants/ as a plain directory and re-checks.",
+)
 CHECKOUT_DIRTY = ErrorCode(
     code="e.state.conflict.mutation-checkout.f",
     title="The mutation checkout has changes of its own, so it was not refreshed.",
@@ -165,6 +172,39 @@ def ensure_checkout(target: Path, git: str = "git") -> tuple[Path, str]:
         raise CHECKOUT_DIRTY(path=wt, status=status.rstrip())
     _must(wt, "checkout", "--quiet", "--detach", upstream, git=git)
     return wt, branch
+
+
+# What prune leaves in mutants/ whatever the checkout holds: mutmut's verdicts and its index of
+# where each generated function lies, the stats files it writes at the top, and caches that hold
+# nothing a test can collect.
+KEPT_SUFFIXES = frozenset({".meta", ".spans"})
+KEPT_AT_TOP = frozenset({"mutmut-stats.json", "mutmut-cicd-stats.json"})
+CACHES = frozenset({"__pycache__", ".pytest_cache", ".hypothesis"})
+
+
+def prune(wt: Path) -> list[str]:
+    """Delete every file under ``wt/mutants`` whose counterpart ``wt`` no longer has as a file.
+
+    mutmut copies tests/ and the source into mutants/ and never deletes from it, so in a
+    checkout that persists a test the repo removed would go on being collected. Verdicts,
+    mutmut's span indexes and stats files, and caches are kept. A ``mutants`` that is a symlink
+    is refused (MUTANTS_LINKED): following it could delete files outside the checkout, and
+    leaving it would let mutmut go on using what is behind it. Returns what was
+    deleted.
+    """
+    root = wt / "mutants"
+    if root.is_symlink():
+        raise MUTANTS_LINKED(path=str(root))
+    gone = []
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root)
+        if (not path.is_file() or path.suffix in KEPT_SUFFIXES or CACHES & set(rel.parts)
+                or (len(rel.parts) == 1 and rel.name in KEPT_AT_TOP)
+                or (wt / rel).is_file()):
+            continue
+        path.unlink()
+        gone.append(rel.as_posix())
+    return gone
 
 
 def clean_env() -> dict[str, str]:
