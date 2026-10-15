@@ -117,11 +117,13 @@ def check_since(target: Path, since: str, git: str = "git") -> None:
     """Refuse a --since that git does not read as a moment at least SINCE_MARGIN ago.
 
     git's approxidate turns nonsense into the current time, which makes a window that selects
-    nothing and looks exactly like a repo where nothing changed.
+    nothing and looks exactly like a repo where nothing changed. Whatever git printed is ignored when it
+    exits non-zero.
     """
-    out = _git(target, "rev-parse", f"--since={since}", git=git).stdout.strip()
+    proc = _git(target, "rev-parse", f"--since={since}", git=git)
+    out = proc.stdout.strip()
     stamp = out.removeprefix("--max-age=")
-    if not (out.startswith("--max-age=") and stamp.isdigit()):
+    if proc.returncode != 0 or not (out.startswith("--max-age=") and stamp.isdigit()):
         raise SINCE_MALFORMED(since=since, reading="nothing at all")
     when = int(stamp)
     if time.time() - when < SINCE_MARGIN:

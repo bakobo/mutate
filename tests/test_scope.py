@@ -154,6 +154,15 @@ def test_a_since_in_the_past_is_accepted(repo, since):
     scope.check_since(repo, since)
 
 
+def test_a_since_git_fails_on_is_refused_whatever_it_printed(repo, tmp_path):
+    fake = tmp_path / "git"
+    fake.write_text("#!/bin/sh\necho --max-age=1\nexit 128\n")
+    fake.chmod(0o755)
+    with pytest.raises(BakoboError) as refused:
+        scope.check_since(repo, "7 days ago", git=str(fake))
+    assert refused.value.code == scope.SINCE_MALFORMED.code
+
+
 def test_a_since_git_prints_nothing_for_is_refused(repo, tmp_path):
     fake = tmp_path / "git"
     fake.write_text("#!/bin/sh\nexit 0\n")
