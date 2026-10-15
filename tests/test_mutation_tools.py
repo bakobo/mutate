@@ -305,6 +305,37 @@ def test_every_tick_runs_in_the_target_not_the_callers_directory(sample, tmp_pat
     assert {c["cwd"] for c in seen} == {str(root)}
 
 
+def _target_with_report(tmp_path, sample):
+    root = tmp_path / "target"
+    (root / ".ignored" / "mutation").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (root / ".ignored" / "mutation" / "report.json").write_text(sample.read_text())
+    return root
+
+
+TICK_ANSWERS = {"ls": {"out": "(no ticks)\n"}, "add": {"out": "4ghi  filed\n"},
+                "show": {"out": "title\n"}, "note": {}}
+
+
+def test_a_relative_tick_path_is_the_callers_not_the_targets(sample, tmp_path, monkeypatch):
+    root = _target_with_report(tmp_path, sample)
+    caller = tmp_path / "caller"
+    recorder(caller / "bin", "tick", TICK_ANSWERS)
+    monkeypatch.chdir(caller)
+    assert ticks.main([str(root), "--tick", "bin/tick"]) == 0
+    seen = recorded(caller / "bin", "tick")
+    assert seen and {c["cwd"] for c in seen} == {str(root)}
+
+
+def test_a_bare_tick_name_is_looked_up_on_path(sample, tmp_path, monkeypatch):
+    root = _target_with_report(tmp_path, sample)
+    recorder(tmp_path / "onpath", "tick", TICK_ANSWERS)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'onpath'}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.chdir(tmp_path)
+    assert ticks.main([str(root), "--tick", "tick"]) == 0
+    assert recorded(tmp_path / "onpath", "tick")
+
+
 def test_ticks_finds_the_target_around_the_cwd(sample, tmp_path, monkeypatch, capsys):
     root = tmp_path / "target"
     (root / "docs").mkdir(parents=True)

@@ -40,6 +40,7 @@ in the code, since a survivor is a question about the tests and the line it name
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -319,8 +320,19 @@ def parse(argv: list[str] | None, prog: str | None = None) -> argparse.Namespace
     return parser.parse_args(argv)
 
 
+def executable(name: str) -> str:
+    """``name`` as tick is run in the target: a path made absolute against the caller's cwd.
+
+    tick runs with the target as its cwd, so a relative path such as ``bin/tick`` would
+    otherwise be looked for there. A bare name, with no separator, stays a PATH lookup.
+    """
+    seps = os.sep + (os.altsep or "")
+    return os.path.abspath(name) if any(sep in name for sep in seps) else name
+
+
 def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     args = parse(argv, prog)
+    args.tick = executable(args.tick)
     try:
         root = args.target or target_root(Path.cwd())
         sinks = declared_sinks(root)
