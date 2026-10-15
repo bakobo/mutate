@@ -7,6 +7,7 @@ and the bounded reading of a report someone else produced (``read_report``).
 from __future__ import annotations
 
 import ast
+import builtins
 import copy
 import io
 import json
@@ -412,9 +413,45 @@ def _only_text(old: object, new: object, text: bool = True) -> bool:
     return True
 
 
-def _inert_value(old: ast.AST, new: ast.AST) -> bool:
-    """A whole argument, keyword value or cause that changed only inertly (see ``diagnostic``)."""
-    return (isinstance(new, ast.Constant) and new.value is None) or _only_text(old, new)
+def _safe(node: ast.AST) -> bool:
+    """Whether evaluating ``node`` is trusted not to raise.
+
+    That is a name, a dotted chain of names, a constant, or an f-string or ``+`` built only
+    from those.
+    """
+    if isinstance(node, (ast.Name, ast.Constant)):
+        return True
+    if isinstance(node, ast.Attribute):
+        return _safe(node.value) and isinstance(node.value, (ast.Name, ast.Attribute))
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _safe(node.left) and _safe(node.right)
+    if isinstance(node, ast.JoinedStr):
+        return all(_safe(part) for part in node.values)
+    if isinstance(node, ast.FormattedValue):
+        return _safe(node.value) and (node.format_spec is None or _safe(node.format_spec))
+    return False
+
+
+def _takes_nones(callee: ast.AST, count: int) -> bool:
+    """Whether ``callee`` is a builtin exception's bare name that constructs from ``count`` Nones.
+
+    Constructing one runs only that builtin, so it is safe to try here; UnicodeDecodeError,
+    for one, refuses.
+    """
+    if not isinstance(callee, ast.Name):
+        return False
+    cls = getattr(builtins, callee.id, None)
+    if not (isinstance(cls, type) and issubclass(cls, BaseException)):
+        return False
+    try:
+        cls(*[None] * count)
+    except Exception:  # noqa: BLE001 - any refusal means None is not an inert argument
+        return False
+    return True
+
+
+def _is_none(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and node.value is None
 
 
 def _inert_raise(old: ast.Raise, new: ast.Raise) -> bool:
@@ -422,17 +459,21 @@ def _inert_raise(old: ast.Raise, new: ast.Raise) -> bool:
     if isinstance(old.exc, ast.Call):
         was, call = old.exc, new.exc
         assert isinstance(call, ast.Call)  # the masks are equal, so the callee is too
-        if len(was.args) != len(call.args) or not all(
-                _inert_value(a, b) for a, b in zip(was.args, call.args, strict=True)):
+        if len(was.args) != len(call.args):
             return False
-        remaining = iter(was.keywords)
-        for kept in call.keywords:
-            match = next((k for k in remaining if k.arg == kept.arg), None)
-            if match is None or not _inert_value(match.value, kept.value):
+        for a, b in zip(was.args, call.args, strict=True):
+            if not (_only_text(a, b) or (_is_none(b) and _safe(a)
+                                         and _takes_nones(was.func, len(was.args)))):
                 return False
+        # A constructor's keywords are its own contract, invisible here: one dropped, or made
+        # None, can make the construction itself raise, so only their text may change.
+        if [k.arg for k in was.keywords] != [k.arg for k in call.keywords] or not all(
+                _only_text(a.value, b.value)
+                for a, b in zip(was.keywords, call.keywords, strict=True)):
+            return False
     if old.cause is not None:
         assert new.cause is not None  # the masks are equal, so a cause is still there
-        return _inert_value(old.cause, new.cause)
+        return _only_text(old.cause, new.cause) or (_is_none(new.cause) and _safe(old.cause))
     return True
 
 
@@ -452,17 +493,20 @@ def diagnostic(source: str, line: int, removed: list[str], added: list[str]) -> 
     Lying inside the arguments is not enough: ``ValueError(1 / 0)`` raises ZeroDivisionError and
     ``ValueError(1 * 0)`` raises ValueError. So each raise is paired with the one in the same
     position in the mutant, and every difference between them must be inert: (a) the value of a
-    str constant changed that is the argument itself, or reaches it only as an operand of
-    ``+``, an f-string's literal part, the left of ``%`` holding no ``%``, or the receiver of
+    str constant changed that is the argument itself, or reaches it only as an operand of ``+``,
+    an f-string's literal part, the left of ``%`` holding no ``%``, or the receiver of
     ``.format`` holding no brace (``_text_flows``); a str that is a key, a call's argument, a
     format spec, the right of ``%`` or an argument of ``.format`` is behaviour: ``d["k"]``,
-    ``int("3")`` and ``"%c" % "A"`` raise differently when it changes; (b) a whole argument, keyword
-    value or cause became the constant None; or (c) keyword arguments were dropped, the
-    remaining ones, matched by name, being inert themselves. (b) and (c) remove evaluation
-    rather than change it: if the original argument had itself raised, the raise would never
-    have worked, and a test would have noticed. Any other difference, an operator, a number, a
-    name, a call, an attribute, a subscript, a changed count of positional arguments, is
-    behavioural.
+    ``int("3")`` and ``"%c" % "A"`` raise differently when it changes; or (b) an argument or the
+    cause became the constant None, which removes its evaluation rather than changing it, and is
+    inert only when that evaluation could not have raised (the original is a name, a dotted
+    chain of names, a constant, or an f-string or ``+`` of those) and, for an argument, the
+    callee is a builtin exception's bare name that constructs from that many Nones
+    (``_takes_nones``; UnicodeDecodeError does not). A keyword dropped or made None is never
+    inert: a constructor's keywords are its own contract, which the AST cannot see. Any other
+    difference, an operator, a number, a name, a call, an attribute, a subscript, a changed
+    count of arguments, is behavioural. This leans behavioural on purpose: most survivors inside
+    a custom exception's arguments stay behavioural and become ticks.
     """
     lines = source.splitlines()
     end = line - 1 + len(removed)

@@ -41,14 +41,10 @@ class C:
      ['        raise ValueError(None, code="e.x.f")']),
     (3, ['        raise ValueError(f"bad {x}", code="e.x.f")'],
      ['        raise ValueError(f"bad {x}", code="XXe.x.fXX")']),
-    (3, ['        raise ValueError(f"bad {x}", code="e.x.f")'],
-     ['        raise ValueError(f"bad {x}", )']),
     (4, ['    raise KeyError("missing") from err'], ['    raise KeyError("missing") from None']),
-    (6, ['                         field="name")'], ['                         field=None)']),
     # A method's diff is dedented by mutmut; the file's own indentation is restored.
     (16, ['    raise ValueError("a", self.x)'], ['    raise ValueError("a", None)']),
-], ids=["positional", "keyword", "dropped-keyword", "from-cause",
-        "continuation-line", "method"])
+], ids=["positional", "keyword", "from-cause", "method"])
 def test_a_change_inside_a_raises_arguments_is_diagnostic(line, removed, added):
     assert shared.diagnostic(SOURCE, line, removed, added)
 
@@ -74,9 +70,14 @@ def test_a_change_inside_a_raises_arguments_is_diagnostic(line, removed, added):
     # longer runs and whatever it raised no longer escapes.
     (3, ['        raise ValueError(f"bad {x}", code="e.x.f")'],
      ['        raise ValueError(f"bad {None}", code="e.x.f")']),
+    # A constructor's keywords are its own contract, which the AST cannot see: dropping one
+    # or making it None can make the construction itself raise.
+    (3, ['        raise ValueError(f"bad {x}", code="e.x.f")'],
+     ['        raise ValueError(f"bad {x}", )']),
+    (6, ['                         field="name")'], ['                         field=None)']),
 ], ids=["callee", "removed", "after", "bare", "callee-args", "cause-dropped", "nothing-removed",
         "mismatch", "beyond", "line-zero", "unparsable", "unchanged", "partly-outside",
-        "indent-mismatch", "fstring-field"])
+        "indent-mismatch", "fstring-field", "dropped-keyword", "continuation-line"])
 def test_anything_else_is_behavioural(line, removed, added):
     assert not shared.diagnostic(SOURCE, line, removed, added)
 
@@ -107,6 +108,12 @@ def g(x, d, err):
     raise ValueError("bad " + x)
     raise ValueError("%c" % "A")
     raise ValueError("bad {}".format("a"))
+    raise MyError(x)
+    raise UnicodeDecodeError(x, x, x, x, x)
+    raise KeyError("missing") from f(x)
+    raise ValueError(x.y.z, f"at {x.y}" + "!")
+    raise dict(x)
+    raise errors.Refused(x)
 '''
 
 
@@ -134,10 +141,27 @@ def g(x, d, err):
     (17, ['    raise ValueError("%c" % "A")'], ['    raise ValueError("%c" % "AA")']),
     (18, ['    raise ValueError("bad {}".format("a"))'],
      ['    raise ValueError("bad {}".format("XXaXX"))']),
+    # None in place of an argument removes its evaluation, which is inert only when that
+    # evaluation could not raise and the constructor is a builtin exception that takes None.
+    (2, ['    raise ValueError(1 / 0)'], ['    raise ValueError(None)']),
+    (19, ['    raise MyError(x)'], ['    raise MyError(None)']),
+    (20, ['    raise UnicodeDecodeError(x, x, x, x, x)'],
+     ['    raise UnicodeDecodeError(x, None, x, x, x)']),
+    (21, ['    raise KeyError("missing") from f(x)'], ['    raise KeyError("missing") from None']),
+    (23, ['    raise dict(x)'], ['    raise dict(None)']),
+    (24, ['    raise errors.Refused(x)'], ['    raise errors.Refused(None)']),
+    (5, ['    raise ValueError("{} bad".format(x))'], ['    raise ValueError(None)']),
+    (10, ['    raise ValueError("%s bad" % x)'], ['    raise ValueError(None)']),
+    (8, ['    raise ValueError(x, code=d, field="f")'], ['    raise ValueError(x, field="f")']),
+    (8, ['    raise ValueError(x, code=d, field="f")'],
+     ['    raise ValueError(x, code=None, field="f")']),
 ], ids=["operator", "number", "name", "format-receiver-braces", "percent-left", "format-spec",
         "fstring-name", "positional-dropped", "keyword-to-name",
         "keyword-renamed", "subscript-key", "call-argument", "concatenated-name",
-        "argument-to-number", "percent-right", "format-argument"])
+        "argument-to-number", "percent-right", "format-argument", "unsafe-arg-none",
+        "custom-exception-none", "unicode-decode-none", "unsafe-cause-none", "not-an-exception",
+        "dotted-callee-none", "formatted-arg-none", "percent-arg-none", "keyword-dropped",
+        "keyword-none"])
 def test_a_behavioural_change_inside_a_raises_arguments_is_not_diagnostic(line, removed, added):
     assert not shared.diagnostic(INERT, line, removed, added)
 
@@ -147,15 +171,13 @@ def test_a_behavioural_change_inside_a_raises_arguments_is_not_diagnostic(line, 
      ['    raise ValueError("XXbadXX", code="e.x.f")']),
     (7, ['    raise ValueError(f"bad {x} here")'], ['    raise ValueError(f"XXbad {x} hereXX")']),
     (4, ['    raise ValueError(x)'], ['    raise ValueError(None)']),
-    (8, ['    raise ValueError(x, code=d, field="f")'], ['    raise ValueError(x, field="f")']),
-    (8, ['    raise ValueError(x, code=d, field="f")'],
-     ['    raise ValueError(x, code=None, field="f")']),
     (9, ['    raise KeyError("missing") from err'], ['    raise KeyError("missing") from None']),
-    (5, ['    raise ValueError("{} bad".format(x))'], ['    raise ValueError(None)']),
+    (22, ['    raise ValueError(x.y.z, f"at {x.y}" + "!")'],
+     ['    raise ValueError(None, f"at {x.y}" + "!")']),
+    (22, ['    raise ValueError(x.y.z, f"at {x.y}" + "!")'], ['    raise ValueError(x.y.z, None)']),
     (16, ['    raise ValueError("bad " + x)'], ['    raise ValueError("XXbad XX" + x)']),
-    (10, ['    raise ValueError("%s bad" % x)'], ['    raise ValueError(None)']),
-], ids=["message", "fstring-literal", "arg-none", "keyword-dropped", "keyword-none",
-        "cause-none", "formatted-arg-none", "concatenated", "percent-arg-none"])
+], ids=["message", "fstring-literal", "arg-none", "cause-none", "concatenated",
+        "dotted-arg-none", "built-arg-none"])
 def test_an_inert_change_inside_a_raises_arguments_is_diagnostic(line, removed, added):
     assert shared.diagnostic(INERT, line, removed, added)
 
