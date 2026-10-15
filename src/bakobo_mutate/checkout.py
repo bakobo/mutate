@@ -167,25 +167,32 @@ def ensure_checkout(target: Path, git: str = "git") -> tuple[Path, str]:
     return wt, branch
 
 
-# What prune leaves in mutants/ whatever the checkout holds: mutmut's verdicts, its own files
-# at the top, and caches that hold nothing a test can collect.
+# What prune leaves in mutants/ whatever the checkout holds: mutmut's verdicts and its index of
+# where each generated function lies, the stats files it writes at the top, and caches that hold
+# nothing a test can collect.
+KEPT_SUFFIXES = frozenset({".meta", ".spans"})
+KEPT_AT_TOP = frozenset({"mutmut-stats.json", "mutmut-cicd-stats.json"})
 CACHES = frozenset({"__pycache__", ".pytest_cache", ".hypothesis"})
 
 
 def prune(wt: Path) -> list[str]:
-    """Delete every file under ``wt/mutants`` whose counterpart ``wt`` no longer has.
+    """Delete every file under ``wt/mutants`` whose counterpart ``wt`` no longer has as a file.
 
     mutmut copies tests/ and the source into mutants/ and never deletes from it, so in a
-    checkout that persists a test the repo removed would go on being collected. Verdicts
-    (``.meta``), mutmut's own top-level files and caches are kept. Returns what was deleted.
+    checkout that persists a test the repo removed would go on being collected. Verdicts,
+    mutmut's span indexes and stats files, and caches are kept. A ``mutants`` that is a symlink
+    is left alone, since following it could delete files outside the checkout. Returns what was
+    deleted.
     """
     root = wt / "mutants"
+    if root.is_symlink():
+        return []
     gone = []
     for path in sorted(root.rglob("*")):
         rel = path.relative_to(root)
-        if (not path.is_file() or path.suffix == ".meta" or CACHES & set(rel.parts)
-                or (len(rel.parts) == 1 and rel.name.startswith("mutmut"))
-                or (wt / rel).exists()):
+        if (not path.is_file() or path.suffix in KEPT_SUFFIXES or CACHES & set(rel.parts)
+                or (len(rel.parts) == 1 and rel.name in KEPT_AT_TOP)
+                or (wt / rel).is_file()):
             continue
         path.unlink()
         gone.append(rel.as_posix())

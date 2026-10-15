@@ -251,3 +251,31 @@ def test_verdicts_mutmuts_own_files_and_caches_are_kept(tmp_path):
 
 def test_a_checkout_without_mutants_has_nothing_to_prune(tmp_path):
     assert checkout.prune(tmp_path) == []
+
+
+def test_a_symlinked_mutants_directory_is_not_followed(tmp_path):
+    outside = tmp_path / "outside"
+    tree(outside, "precious.txt")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / "mutants").symlink_to(outside, target_is_directory=True)
+    assert checkout.prune(wt) == []
+    assert (outside / "precious.txt").exists()
+
+
+def test_only_mutmuts_own_stats_files_are_exempt_by_name(tmp_path):
+    # A copied test whose name merely starts with mutmut is still a test pytest would collect.
+    tree(tmp_path / "mutants", "mutmut-stats.json", "mutmut-cicd-stats.json", "mutmut_test.py")
+    assert checkout.prune(tmp_path) == ["mutmut_test.py"]
+
+
+def test_a_file_whose_counterpart_is_now_a_directory_is_pruned(tmp_path):
+    tree(tmp_path, "tests/helpers/__init__.py")
+    tree(tmp_path / "mutants", "tests/helpers")
+    assert checkout.prune(tmp_path) == ["tests/helpers"]
+
+
+def test_mutmuts_span_indexes_are_kept(tmp_path):
+    tree(tmp_path, "src/pkg/mod.py")
+    tree(tmp_path / "mutants", "src/pkg/mod.py", "src/pkg/mod.py.spans")
+    assert checkout.prune(tmp_path) == []
