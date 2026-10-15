@@ -53,7 +53,7 @@ Every survivor in a report carries one of three classes. Only `behavioural` surv
 Results exist only where someone ran the tool, so freshness is signalled rather than assumed. Enrol each repo once:
 
 ```sh
-cd ~/code/bakobo/heti && bakobo-mutate enroll
+cd path/to/your-repo && bakobo-mutate enroll
 ```
 
 Enrolment is a list of absolute repo roots in `$XDG_CONFIG_HOME/bakobo-mutate/repos` (default `~/.config/bakobo-mutate/repos`); `bakobo-mutate unenroll` removes one. `bakobo-mutate sweep` fetches every enrolled repo, works out what is stale, and keeps at most one open `mutation-stale` tick in that repo's own ledger. It files one when something is stale and none is open, notes the open one with the current list when the list has changed since its last note, and ticks it off when nothing is stale. A repo that cannot be swept is reported and skipped, and the sweep exits 1 at the end if any was.
