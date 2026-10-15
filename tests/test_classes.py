@@ -105,6 +105,8 @@ def g(x, d, err):
     raise ValueError(d["k"])
     raise ValueError(int("3"))
     raise ValueError("bad " + x)
+    raise ValueError("%c" % "A")
+    raise ValueError("bad {}".format("a"))
 '''
 
 
@@ -127,10 +129,15 @@ def g(x, d, err):
     (15, ['    raise ValueError(int("3"))'], ['    raise ValueError(int("XX3XX"))']),
     (16, ['    raise ValueError("bad " + x)'], ['    raise ValueError("bad " + y)']),
     (12, ['    raise ValueError(x, x)'], ['    raise ValueError(x, 1)']),
+    # The right of % and the arguments of .format are values being formatted: "%c" % "AA"
+    # raises TypeError where "%c" % "A" did not.
+    (17, ['    raise ValueError("%c" % "A")'], ['    raise ValueError("%c" % "AA")']),
+    (18, ['    raise ValueError("bad {}".format("a"))'],
+     ['    raise ValueError("bad {}".format("XXaXX"))']),
 ], ids=["operator", "number", "name", "format-receiver-braces", "percent-left", "format-spec",
         "fstring-name", "positional-dropped", "keyword-to-name",
         "keyword-renamed", "subscript-key", "call-argument", "concatenated-name",
-        "argument-to-number"])
+        "argument-to-number", "percent-right", "format-argument"])
 def test_a_behavioural_change_inside_a_raises_arguments_is_not_diagnostic(line, removed, added):
     assert not shared.diagnostic(INERT, line, removed, added)
 

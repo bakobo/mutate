@@ -369,13 +369,17 @@ def _is_format_call(node: ast.AST) -> bool:
 def _text_flows(node: ast.AST, name: str, value: ast.AST, other: ast.AST) -> bool:
     """Whether a str in field ``name`` of ``node`` still reaches the argument as message text.
 
-    It does through ``+``, ``%`` and ``.format``, as ``_sink_of_literal`` follows it, and as an
-    f-string's literal part; a format string carrying its placeholders does not, since
-    changing them can make the formatting itself fail.
+    It does as either operand of ``+``, as an f-string's literal part, as the left of ``%``
+    when it holds no ``%``, and as the receiver of ``.format`` when it holds no brace. The
+    right of ``%`` and the arguments of ``.format`` are values being formatted (``"%c" % "A"``
+    works and ``"%c" % "AA"`` raises), and a format string's placeholders can make the
+    formatting itself fail, so none of those is text.
     """
-    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
-        holds = isinstance(node.op, ast.Mod) and name == "left"
-        return not (holds and (_placeholder_in(value, "%") or _placeholder_in(other, "%")))
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return name == "left" and not (_placeholder_in(value, "%")
+                                       or _placeholder_in(other, "%"))
     if _is_format_call(node):
         return name == "func"
     if isinstance(node, ast.Attribute) and node.attr == "format" and name == "value":
@@ -448,11 +452,11 @@ def diagnostic(source: str, line: int, removed: list[str], added: list[str]) -> 
     Lying inside the arguments is not enough: ``ValueError(1 / 0)`` raises ZeroDivisionError and
     ``ValueError(1 * 0)`` raises ValueError. So each raise is paired with the one in the same
     position in the mutant, and every difference between them must be inert: (a) the value of a
-    str constant changed that reaches the argument only through ``+``, ``%``, ``.format`` or an
-    f-string's literal parts, as ``_sink_of_literal`` follows it, and is not the left of ``%``
-    holding a ``%`` or the receiver of ``.format`` holding a brace, since those can make the
-    formatting itself fail (a str that is a key, a call's argument or a format spec is
-    behaviour: ``d["k"]`` and ``int("3")`` raise when it changes); (b) a whole argument, keyword
+    str constant changed that is the argument itself, or reaches it only as an operand of
+    ``+``, an f-string's literal part, the left of ``%`` holding no ``%``, or the receiver of
+    ``.format`` holding no brace (``_text_flows``); a str that is a key, a call's argument, a
+    format spec, the right of ``%`` or an argument of ``.format`` is behaviour: ``d["k"]``,
+    ``int("3")`` and ``"%c" % "A"`` raise differently when it changes; (b) a whole argument, keyword
     value or cause became the constant None; or (c) keyword arguments were dropped, the
     remaining ones, matched by name, being inert themselves. (b) and (c) remove evaluation
     rather than change it: if the original argument had itself raised, the raise would never
