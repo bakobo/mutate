@@ -10,7 +10,9 @@ last mutated at and whether every one of its mutants then had a verdict. A modul
 the ref changed it after that commit, when its last run left it incomplete, or, for a module
 the stamp has never seen, when the ref changed it after the stamp's ``base``: the commit of the
 last run whose scope was computed rather than named. With no base yet, an unstamped module is
-stale if it changed inside the ``--since`` window. Anything git cannot answer counts as stale.
+stale if it changed inside the ``--since`` window. A stamped commit or base git cannot compare
+counts as stale; a ref git cannot resolve, or a listing git fails, is ``GIT_FAILED``, never an
+empty answer, since nothing stale would look exactly like that.
 """
 
 from __future__ import annotations
@@ -37,6 +39,16 @@ CONFIG_UNREADABLE = ErrorCode(
     args=("ref", "problem"),
     hint="Fix pyproject.toml on the default branch; running this again before then will fail "
          "the same way.",
+)
+GIT_FAILED = ErrorCode(
+    code="e.env.git.mutation-scope.f",
+    title="git could not say what the default branch holds, so no module could be chosen.",
+    detail="git {command} in {target} exited {exit_code}: {stderr}",
+    args=("command", "target", "exit_code", "stderr"),
+    hint=(
+        "Fetch the target (git fetch origin) so origin's default branch resolves, then run "
+        "this again; running it again before then will fail the same way."
+    ),
 )
 STAMP_MALFORMED = ErrorCode(
     code="e.self.corrupt.mutation-stamp.f",
@@ -71,8 +83,29 @@ def _show(target: Path, ref: str, path: str, git: str = "git") -> str | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
+def _failed(target: Path, proc: subprocess.CompletedProcess) -> Exception:
+    return GIT_FAILED(command=" ".join(proc.args[3:]), target=target,
+                      exit_code=proc.returncode,
+                      stderr=(proc.stderr or "").strip() or "(it printed nothing)")
+
+
+def verify_ref(target: Path, ref: str, git: str = "git") -> None:
+    """Refuse with GIT_FAILED unless ``ref`` names a commit.
+
+    Without this, every answer read at an unknown ref would be empty, which looks fresh.
+    """
+    proc = _git(target, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", git=git)
+    if proc.returncode != 0:
+        raise _failed(target, proc)
+
+
 def config_at(target: Path, ref: str, git: str = "git") -> dict:
-    """``[tool.mutmut]`` from pyproject.toml at ``ref``, or {} when there is no pyproject."""
+    """``[tool.mutmut]`` from pyproject.toml at ``ref``, or {} when there is no pyproject.
+
+    The ref is verified first, so a pyproject that is absent means just that, and a ref git
+    cannot resolve is GIT_FAILED rather than a repo with no configuration.
+    """
+    verify_ref(target, ref, git)
     text = _show(target, ref, "pyproject.toml", git)
     if text is None:
         return {}
@@ -149,13 +182,17 @@ def changed_between(target: Path, base: str, ref: str, cfg: dict,
 
 
 def all_sources(target: Path, ref: str, cfg: dict, git: str = "git") -> set[str]:
-    out = _git(target, "ls-tree", "-r", "--name-only", ref, "--", *sources(cfg),
-               git=git).stdout
-    return {line for line in out.splitlines() if line}
+    """Every source path at ``ref``; GIT_FAILED when git cannot list them."""
+    proc = _git(target, "ls-tree", "-r", "--name-only", ref, "--", *sources(cfg), git=git)
+    if proc.returncode != 0:
+        raise _failed(target, proc)
+    return {line for line in proc.stdout.splitlines() if line}
 
 
 def stale(target: Path, ref: str, stamp: Stamp, since: str, cfg: dict,
           git: str = "git") -> list[str]:
+    """The stale modules at ``ref``; GIT_FAILED, never an empty list, when ``ref`` is unknown."""
+    verify_ref(target, ref, git)
     found: set[str] = set()
     by_commit: dict[str, list[str]] = {}
     for path, entry in stamp.modules.items():

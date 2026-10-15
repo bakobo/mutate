@@ -66,6 +66,25 @@ def test_a_ref_without_a_pyproject_has_no_table(repo):
     assert scope.config_at(repo, "HEAD") == {}
 
 
+def test_a_ref_git_cannot_resolve_is_refused_not_read_as_no_pyproject(repo):
+    with pytest.raises(BakoboError) as refused:
+        scope.config_at(repo, "no-such-ref")
+    assert refused.value.code == scope.GIT_FAILED.code == "e.env.git.mutation-scope.f"
+    assert "no-such-ref" in refused.value.detail
+
+
+def test_a_failed_listing_is_refused_not_read_as_no_sources(repo):
+    with pytest.raises(BakoboError) as refused:
+        scope.all_sources(repo, "no-such-ref", {"source_paths": ["src/pkg"]})
+    assert refused.value.code == scope.GIT_FAILED.code
+    assert "ls-tree" in refused.value.detail
+
+
+def test_the_sources_at_a_ref_are_listed(repo):
+    assert scope.all_sources(repo, "HEAD", {"source_paths": ["src/pkg"]}) == {
+        "src/pkg/mod.py", "src/pkg/other.py", "src/pkg/consts.py"}
+
+
 @pytest.mark.parametrize("body", ["not = [toml", 'tool = "x"', "[tool]\nmutmut = 3\n"],
                          ids=["not-toml", "tool-not-table", "mutmut-not-table"])
 def test_an_unreadable_mutmut_table_is_refused(repo, body):
@@ -227,6 +246,14 @@ def test_a_deleted_or_excluded_module_is_never_stale(repo):
         do_not_mutate = ["*/pkg/other.py"]
         """)})
     assert stale(repo, stamp) == []
+
+
+@pytest.mark.parametrize("base", [True, False], ids=["base", "no-base"])
+def test_staleness_at_a_ref_git_cannot_resolve_is_refused(repo, base):
+    stamp = fresh(repo, "src/pkg/mod.py", base=base)
+    with pytest.raises(BakoboError) as refused:
+        scope.stale(repo, "no-such-ref", stamp, "7 days ago", {"source_paths": ["src/pkg"]})
+    assert refused.value.code == scope.GIT_FAILED.code
 
 
 # --- what a run covers ------------------------------------------------------------------------
