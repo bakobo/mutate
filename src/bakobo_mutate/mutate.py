@@ -18,7 +18,8 @@ survivor and "no tests" verdict anywhere, since re-running them is the only way 
 test is noticed.
 
 It writes ``report.json`` (one record per surviving mutant), ``summary.md``,
-``mutmut-run.log`` and ``stamp.json`` to ``<TARGET>/.ignored/mutation/``. It exits 0 whether or
+``mutmut-run.log`` and ``stamp.json`` to ``<TARGET>/.ignored/mutation/``; a run that
+fails leaves the previous ``stamp.json`` as it was, while an interrupted one still writes it. It exits 0 whether or
 not any mutant survived; 130 when interrupted, after reporting what finished, since mutmut
 saves each verdict as it completes and the next run starts where this one stopped; and 2 when
 the run could not be carried out or was refused, because a harness failure that reported
@@ -550,8 +551,10 @@ def execute(target: Path, args: argparse.Namespace) -> int:
                                      args.git)
     plan = Plan(modules=modules, survivors=args.survivors, chunk=args.chunk, sinks=sinks)
     outcome = mutate(wt, plan, mutmut, log)
-    if outcome.verdicts is not None:
-        # A module with no mutants on record is complete only if generation finished.
+    if outcome.verdicts is not None and outcome.failure is None:
+        # A failed run is no measurement, so the last stamp stands; an interrupted one is, as
+        # far as it got. A module with no mutants on record is complete only if generation
+        # finished.
         done = {m: ok and outcome.generated
                 for m, ok in meta.complete(outcome.verdicts, modules).items()}
         scope.write_stamp(target, scope.updated(stamp, done, commit,

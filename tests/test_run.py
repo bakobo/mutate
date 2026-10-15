@@ -352,15 +352,33 @@ def test_a_clean_test_failure_beside_nothing_matches_fails_the_run(target, fake,
     assert not (target / ".ignored" / "mutation" / "stamp.json").exists()
 
 
-def test_a_failing_chunk_fails_the_run_and_keeps_what_finished(target, fake, uv):
+def report_only(target) -> tuple[dict, str]:
+    out = target / ".ignored" / "mutation"
+    return json.loads((out / "report.json").read_text()), (out / "summary.md").read_text()
+
+
+def test_a_failing_chunk_fails_the_run_and_writes_no_stamp(target, fake, uv):
+    # mutmut keeps what finished, so nothing is lost; but a failed run is no measurement, and a
+    # stamp from it would mark its modules as mutated at this commit.
     target, _ = target
     fake.set(run={"exit": 1, "out": mutate.CLEAN_TEST_FAILED})
     assert run(target, fake, uv) == 2
-    report, _, stamp = outputs(target)
+    report, _ = report_only(target)
     assert report["failure_code"] == "e.env.mutmut-run.f" and report["failure_retryable"] is False
     assert "bakobo-mutate run" in report["failure_hint"]
     assert "workflow" not in report["failure_hint"]
-    assert stamp["modules"]["src/pkg/mod.py"]["complete"] is False
+    assert not (target / ".ignored" / "mutation" / "stamp.json").exists()
+
+
+def test_a_failed_run_leaves_the_previous_stamp_alone(target, fake, uv):
+    target, seed = target
+    assert run(target, fake, uv) == 0
+    stamp = target / ".ignored" / "mutation" / "stamp.json"
+    before = stamp.read_text()
+    push_change(seed, "src/pkg/other.py", OTHER + "\n")
+    fake.set(run={"exit": 1, "out": mutate.CLEAN_TEST_FAILED})
+    assert run(target, fake, uv) == 2
+    assert stamp.read_text() == before
 
 
 def test_an_unreadable_meta_fails_the_run(target, fake, uv):
@@ -378,7 +396,8 @@ def test_a_failing_mutmut_query_is_a_recorded_failure(target, fake, uv, which):
     target, _ = target
     fake.set(**{which: 1})
     assert run(target, fake, uv) == 2
-    report, summary, _ = outputs(target)
+    report, summary = report_only(target)
+    assert not (target / ".ignored" / "mutation" / "stamp.json").exists()
     assert report["failure_code"] == mutate.RESULTS_UNREADABLE.code
     assert report["survivors"] == [] and "Running it again may help" in summary
     assert "workflow" not in report["failure_hint"]
