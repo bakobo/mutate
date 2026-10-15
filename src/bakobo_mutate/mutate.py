@@ -531,6 +531,7 @@ def execute(target: Path, args: argparse.Namespace) -> int:
     """One run against ``target``, under the lock; returns the exit status."""
     wt, branch = checkout.ensure_checkout(target, args.git)
     checkout.sync(wt, args.uv)
+    checkout.prune(wt)
     mutmut = checkout.find_mutmut(wt, args.mutmut)
     ref = f"origin/{branch}"
     commit = subprocess.run([args.git, "-C", str(target), "rev-parse", ref],

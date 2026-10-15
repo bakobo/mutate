@@ -167,6 +167,31 @@ def ensure_checkout(target: Path, git: str = "git") -> tuple[Path, str]:
     return wt, branch
 
 
+# What prune leaves in mutants/ whatever the checkout holds: mutmut's verdicts, its own files
+# at the top, and caches that hold nothing a test can collect.
+CACHES = frozenset({"__pycache__", ".pytest_cache", ".hypothesis"})
+
+
+def prune(wt: Path) -> list[str]:
+    """Delete every file under ``wt/mutants`` whose counterpart ``wt`` no longer has.
+
+    mutmut copies tests/ and the source into mutants/ and never deletes from it, so in a
+    checkout that persists a test the repo removed would go on being collected. Verdicts
+    (``.meta``), mutmut's own top-level files and caches are kept. Returns what was deleted.
+    """
+    root = wt / "mutants"
+    gone = []
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root)
+        if (not path.is_file() or path.suffix == ".meta" or CACHES & set(rel.parts)
+                or (len(rel.parts) == 1 and rel.name.startswith("mutmut"))
+                or (wt / rel).exists()):
+            continue
+        path.unlink()
+        gone.append(rel.as_posix())
+    return gone
+
+
 def clean_env() -> dict[str, str]:
     """This process's environment without anything that would point uv at another venv."""
     return {k: v for k, v in os.environ.items()

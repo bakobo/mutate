@@ -216,3 +216,38 @@ def test_a_checkout_without_mutmut_is_refused(tmp_path):
         checkout.find_mutmut(tmp_path, None)
     assert code_of(refused) == checkout.NO_MUTMUT.code == "e.state.missing.mutmut.f"
     assert "dependency group" in refused.value.hint
+
+
+# --- the mutants/ tree follows the checkout ---------------------------------------------------
+# mutmut copies tests/ and the source into mutants/ and never deletes from it, so a file the
+# repo removed would go on being collected there: heti's first run failed on a deleted test
+# that imported a deleted script.
+
+
+def tree(root, *paths):
+    for rel in paths:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x")
+
+
+def test_a_file_the_checkout_no_longer_has_is_pruned_from_mutants(tmp_path):
+    tree(tmp_path, "tests/test_kept.py", "src/pkg/kept.py", "pyproject.toml")
+    tree(tmp_path / "mutants", "tests/test_kept.py", "tests/test_gone.py", "src/pkg/kept.py",
+         "src/pkg/gone.py", "tests/data/gone.json", "pyproject.toml")
+    assert checkout.prune(tmp_path) == ["src/pkg/gone.py", "tests/data/gone.json",
+                                        "tests/test_gone.py"]
+    left = sorted(p.relative_to(tmp_path / "mutants").as_posix()
+                  for p in (tmp_path / "mutants").rglob("*") if p.is_file())
+    assert left == ["pyproject.toml", "src/pkg/kept.py", "tests/test_kept.py"]
+
+
+def test_verdicts_mutmuts_own_files_and_caches_are_kept(tmp_path):
+    tree(tmp_path / "mutants", "src/pkg/gone.py.meta", "mutmut-stats.json",
+         "tests/__pycache__/test_gone.cpython-314.pyc", ".pytest_cache/v/cache/nodeids",
+         ".hypothesis/examples/x")
+    assert checkout.prune(tmp_path) == []
+    assert len([p for p in (tmp_path / "mutants").rglob("*") if p.is_file()]) == 5
+
+
+def test_a_checkout_without_mutants_has_nothing_to_prune(tmp_path):
+    assert checkout.prune(tmp_path) == []
