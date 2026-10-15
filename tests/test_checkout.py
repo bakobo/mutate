@@ -259,7 +259,10 @@ def test_a_symlinked_mutants_directory_is_not_followed(tmp_path):
     wt = tmp_path / "wt"
     wt.mkdir()
     (wt / "mutants").symlink_to(outside, target_is_directory=True)
-    assert checkout.prune(wt) == []
+    # Refused, not skipped: mutmut would go on using the stale copies behind the link.
+    with pytest.raises(BakoboError) as excinfo:
+        checkout.prune(wt)
+    assert code_of(excinfo) == "e.state.conflict.mutation-mutants-link.f"
     assert (outside / "precious.txt").exists()
 
 
