@@ -361,30 +361,48 @@ def _placeholder_in(node: ast.AST, marks: str) -> bool:
                and any(mark in n.value for mark in marks) for n in ast.walk(node))
 
 
-def _only_text(old: object, new: object, guarded: bool = False) -> bool:
-    """Whether two subtrees are the same but for the values of str constants.
+def _is_format_call(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "format")
 
-    A str constant under a format spec, under the left of ``%`` when either side holds a
-    ``%``, or under the receiver of ``.format`` when either side holds a brace, is ``guarded``:
-    changing it can make the formatting itself fail, so it must not change at all.
+
+def _text_flows(node: ast.AST, name: str, value: ast.AST, other: ast.AST) -> bool:
+    """Whether a str in field ``name`` of ``node`` still reaches the argument as message text.
+
+    It does through ``+``, ``%`` and ``.format``, as ``_sink_of_literal`` follows it, and as an
+    f-string's literal part; a format string carrying its placeholders does not, since
+    changing them can make the formatting itself fail.
+    """
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+        holds = isinstance(node.op, ast.Mod) and name == "left"
+        return not (holds and (_placeholder_in(value, "%") or _placeholder_in(other, "%")))
+    if _is_format_call(node):
+        return name == "func"
+    if isinstance(node, ast.Attribute) and node.attr == "format" and name == "value":
+        return not (_placeholder_in(value, "{}") or _placeholder_in(other, "{}"))
+    return isinstance(node, ast.JoinedStr)
+
+
+def _only_text(old: object, new: object, text: bool = True) -> bool:
+    """Whether two subtrees are the same but for the values of str constants that are text.
+
+    ``text`` says whether a str here reaches the raise's argument as message text (see
+    ``_text_flows``); a str anywhere else, a key, a call's argument, a format spec, must not
+    change at all.
     """
     if isinstance(old, list) and isinstance(new, list):
         return len(old) == len(new) and all(
-            _only_text(a, b, guarded) for a, b in zip(old, new, strict=True))
+            _only_text(a, b, text) for a, b in zip(old, new, strict=True))
     if not (isinstance(old, ast.AST) and isinstance(new, ast.AST)):
         return old == new
     if type(old) is not type(new):
         return False
-    if isinstance(old, ast.Constant) and isinstance(new, ast.Constant) and not guarded:
-        if isinstance(old.value, str) and isinstance(new.value, str):
-            return True
+    if text and isinstance(old, ast.Constant) and isinstance(old.value, str) and isinstance(
+            new.value, str):  # type: ignore[attr-defined]  # new is a Constant too
+        return True
     for name, value in ast.iter_fields(old):
         other = getattr(new, name)
-        inner = guarded or (isinstance(old, ast.FormattedValue) and name == "format_spec")
-        if isinstance(old, ast.BinOp) and isinstance(old.op, ast.Mod) and name == "left":
-            inner = inner or _placeholder_in(value, "%") or _placeholder_in(other, "%")
-        if isinstance(old, ast.Attribute) and old.attr == "format" and name == "value":
-            inner = inner or _placeholder_in(value, "{}") or _placeholder_in(other, "{}")
+        inner = text and _text_flows(old, name, value, other)
         if not _only_text(value, other, inner):
             return False
     return True
@@ -430,9 +448,11 @@ def diagnostic(source: str, line: int, removed: list[str], added: list[str]) -> 
     Lying inside the arguments is not enough: ``ValueError(1 / 0)`` raises ZeroDivisionError
     and ``ValueError(1 * 0)`` raises ValueError. So each raise is paired with the one in the
     same position in the mutant, and every difference between them must be inert: (a) the
-    value of a str constant changed, an f-string's literal parts included, but not a format
-    spec, not the left of ``%`` holding a ``%``, and not the receiver of ``.format`` holding a
-    brace, since those can make the formatting itself fail; (b) a whole argument, keyword value
+    value of a str constant changed that reaches the argument only through ``+``, ``%``,
+    ``.format`` or an f-string's literal parts, as ``_sink_of_literal`` follows it, and is not
+    the left of ``%`` holding a ``%`` or the receiver of ``.format`` holding a brace, since
+    those can make the formatting itself fail (a str that is a key, a call's argument or a
+    format spec is behaviour: ``d["k"]`` and ``int("3")`` raise when it changes); (b) a whole argument, keyword value
     or cause became the constant None; or (c) keyword arguments were dropped, the remaining
     ones, matched by name, being inert themselves. (b) and (c) remove evaluation rather than
     change it: if the original argument had itself raised, the raise would never have worked,

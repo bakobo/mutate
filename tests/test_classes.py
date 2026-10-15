@@ -102,6 +102,9 @@ def g(x, d, err):
     raise ValueError(f"{x:>3}")
     raise ValueError(x, x)
     raise ValueError(x, code=d)
+    raise ValueError(d["k"])
+    raise ValueError(int("3"))
+    raise ValueError("bad " + x)
 '''
 
 
@@ -118,9 +121,16 @@ def g(x, d, err):
     (8, ['    raise ValueError(x, code=d, field="f")'],
      ['    raise ValueError(x, code=d, field=d)']),
     (13, ['    raise ValueError(x, code=d)'], ['    raise ValueError(x, other=d)']),
+    # A str that reaches the argument other than through +, %, .format or an f-string's text is
+    # a key, an argument or a pattern, and changing it can change which exception escapes.
+    (14, ['    raise ValueError(d["k"])'], ['    raise ValueError(d["XXkXX"])']),
+    (15, ['    raise ValueError(int("3"))'], ['    raise ValueError(int("XX3XX"))']),
+    (16, ['    raise ValueError("bad " + x)'], ['    raise ValueError("bad " + y)']),
+    (12, ['    raise ValueError(x, x)'], ['    raise ValueError(x, 1)']),
 ], ids=["operator", "number", "name", "format-receiver-braces", "percent-left", "format-spec",
         "fstring-name", "positional-dropped", "keyword-to-name",
-        "keyword-renamed"])
+        "keyword-renamed", "subscript-key", "call-argument", "concatenated-name",
+        "argument-to-number"])
 def test_a_behavioural_change_inside_a_raises_arguments_is_not_diagnostic(line, removed, added):
     assert not shared.diagnostic(INERT, line, removed, added)
 
@@ -135,8 +145,10 @@ def test_a_behavioural_change_inside_a_raises_arguments_is_not_diagnostic(line, 
      ['    raise ValueError(x, code=None, field="f")']),
     (9, ['    raise KeyError("missing") from err'], ['    raise KeyError("missing") from None']),
     (5, ['    raise ValueError("{} bad".format(x))'], ['    raise ValueError(None)']),
+    (16, ['    raise ValueError("bad " + x)'], ['    raise ValueError("XXbad XX" + x)']),
+    (10, ['    raise ValueError("%s bad" % x)'], ['    raise ValueError(None)']),
 ], ids=["message", "fstring-literal", "arg-none", "keyword-dropped", "keyword-none",
-        "cause-none", "formatted-arg-none"])
+        "cause-none", "formatted-arg-none", "concatenated", "percent-arg-none"])
 def test_an_inert_change_inside_a_raises_arguments_is_diagnostic(line, removed, added):
     assert shared.diagnostic(INERT, line, removed, added)
 
