@@ -133,10 +133,31 @@ def test_survivors_are_found_anywhere():
         ("pkg.b.x_h__mutmut_2", "src/pkg/b.py")]
 
 
-@pytest.mark.parametrize("code", [2, 5])
-def test_an_interrupted_or_other_no_tests_verdict_in_scope_is_needed_again(code):
-    # mutmut 3.8 records 2 for a check the user interrupted and 5 as a second "no tests"; neither
-    # is a verdict on the mutant, so a cache holding one must not keep it from being run.
-    verdicts = {"src/pkg/a.py": {"pkg.a.x_f__mutmut_1": code, "pkg.a.x_f__mutmut_2": 1}}
+def test_only_an_unchecked_or_interrupted_mutant_has_no_verdict():
+    assert meta.UNSETTLED == (None, 2)
+    assert meta.RECHECKED == (0, 5, 33)
+
+
+def test_an_interrupted_verdict_in_scope_is_needed_again():
+    # mutmut 3.8 records 2 for a check the user interrupted; it is no verdict on the mutant, so
+    # a cache holding one must not keep it from being run, and only in scope.
+    verdicts = {"src/pkg/a.py": {"pkg.a.x_f__mutmut_1": 2, "pkg.a.x_f__mutmut_2": 1}}
     assert meta.needed(verdicts, {"src/pkg/a.py"}, survivors=False) == {"pkg.a.x_f__mutmut_1"}
     assert meta.needed(verdicts, set(), survivors=True) == set()
+
+
+@pytest.mark.parametrize("code", [0, 5, 33])
+def test_a_survivor_or_no_tests_verdict_is_rechecked_anywhere_unless_survivors_are_off(code):
+    # Only a new test can change these, and mutmut's cache is keyed on source, so they are run
+    # again on every run, repo-wide, like survivors; but they are verdicts, not gaps in one.
+    verdicts = {"src/pkg/a.py": {"pkg.a.x_f__mutmut_1": code, "pkg.a.x_f__mutmut_2": 1}}
+    assert meta.needed(verdicts, set(), survivors=True) == {"pkg.a.x_f__mutmut_1"}
+    assert meta.needed(verdicts, {"src/pkg/a.py"}, survivors=False) == set()
+    assert meta.complete(verdicts, ["src/pkg/a.py"]) == {"src/pkg/a.py": True}
+
+
+@pytest.mark.parametrize("code", [*meta.STATUS, 99])  # STATUS holds None
+def test_a_module_is_complete_exactly_when_nothing_in_it_is_needed(code):
+    verdicts = {"src/a.py": {"a.x_f__mutmut_1": code}}
+    need = meta.needed(verdicts, {"src/a.py"}, survivors=False)
+    assert meta.complete(verdicts, ["src/a.py"])["src/a.py"] == (not need)

@@ -13,8 +13,9 @@ chooses its modules (``scope``): those named with ``--module``, else those stale
 run, else, before any run, those a first-parent commit touched since ``--since``. It then runs
 the checkout's own mutmut once to generate mutants, which keeps every cached verdict whose
 function did not change, and once more per chunk of names for exactly the mutants that need
-running (``meta``): the unchecked ones in scope and, unless ``--no-survivors``, every survivor
-anywhere, since re-running survivors is the only way a newly added killing test is noticed.
+running (``meta``): the ones in scope with no verdict yet and, unless ``--no-survivors``, every
+survivor and "no tests" verdict anywhere, since re-running them is the only way a newly added
+test is noticed.
 
 It writes ``report.json`` (one record per surviving mutant), ``summary.md``,
 ``mutmut-run.log`` and ``stamp.json`` to ``<TARGET>/.ignored/mutation/``. It exits 0 whether or
@@ -503,9 +504,11 @@ def parse(argv: list[str] | None, prog: str | None) -> argparse.Namespace:
                         help="before any run, mutate modules changed since this git date")
     survivors = parser.add_mutually_exclusive_group()
     survivors.add_argument("--all-survivors", dest="survivors", action="store_true",
-                           default=True, help="re-check every survivor anywhere (default)")
+                           default=True,
+                           help="re-check every survivor and every 'no tests' verdict "
+                                "anywhere (default)")
     survivors.add_argument("--no-survivors", dest="survivors", action="store_false",
-                           help="re-check only the modules in scope")
+                           help="re-check neither; run only what in scope has no verdict yet")
     parser.add_argument("--chunk", type=positive, default=400,
                         help="the most mutant names passed to one mutmut run")
     parser.add_argument("--mutmut", default=None,

@@ -25,9 +25,13 @@ STATUS = {
     24: "timeout", 152: "timeout", 255: "timeout", -11: "segfault", -9: "segfault",
 }
 NOT_CHECKED, SURVIVED = None, 0
-# Codes that are no verdict on the mutant: not checked, interrupted by the user, and both of
-# mutmut's "no tests". A cached one of these is run again.
-UNSETTLED = (NOT_CHECKED, 2, 5, 33)
+# No verdict on the mutant: never checked, or its check was interrupted by the user. A module
+# holding one is incomplete, and one in scope is run again.
+UNSETTLED = (NOT_CHECKED, 2)
+# Verdicts only a new test can change: survived, and both of mutmut's "no tests". They do not
+# make a module incomplete, but mutmut's cache is keyed on source, not tests, so like survivors
+# they are run again on every run, repo-wide, unless survivors are switched off.
+RECHECKED = (SURVIVED, 5, 33)
 # A .meta is a few hundred bytes per mutant; this is beyond any real module's.
 MAX_META_BYTES = 64 * 1024 * 1024
 MUTANT = "__mutmut_"
@@ -85,14 +89,14 @@ def read_meta(wt: Path) -> Verdicts:
 
 
 def needed(verdicts: Verdicts, scope: set[str], survivors: bool) -> set[str]:
-    """In-scope mutants with no verdict yet (UNSETTLED), and every survivor if ``survivors``.
+    """In-scope mutants with no verdict yet (UNSETTLED), and if ``survivors`` every RECHECKED one.
 
-    Survivors are re-run because mutmut's cache is keyed on source, not tests: re-running them
-    is the only way a newly added killing test is noticed.
+    Survivors and "no tests" verdicts are re-run because mutmut's cache is keyed on source, not
+    tests: re-running them is the only way a newly added test is noticed.
     """
     return {key for path, codes in verdicts.items() for key, code in codes.items()
             if (path in scope and code in UNSETTLED)
-            or (survivors and code == SURVIVED)}
+            or (survivors and code in RECHECKED)}
 
 
 def names(verdicts: Verdicts, need: set[str]) -> list[str]:
@@ -117,7 +121,12 @@ def chunks(items: list[str], size: int) -> Iterator[list[str]]:
 
 
 def complete(verdicts: Verdicts, modules: list[str]) -> dict[str, bool]:
-    return {m: all(code is not NOT_CHECKED for code in verdicts.get(m, {}).values())
+    """Per module, whether every one of its mutants has a verdict: none is UNSETTLED.
+
+    Defined from UNSETTLED, as ``needed`` is, so a complete module never has a mutant that a
+    run in scope would still need.
+    """
+    return {m: all(code not in UNSETTLED for code in verdicts.get(m, {}).values())
             for m in modules}
 
 
