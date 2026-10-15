@@ -7,6 +7,7 @@ and the bounded reading of a report someone else produced (``read_report``).
 from __future__ import annotations
 
 import ast
+import copy
 import io
 import json
 import keyword
@@ -354,18 +355,89 @@ def _masked(tree: ast.AST) -> str:
     return ast.dump(_MaskRaiseArguments().visit(tree))
 
 
+def _placeholder_in(node: ast.AST, marks: str) -> bool:
+    """Whether any str constant under ``node`` holds one of the characters in ``marks``."""
+    return any(isinstance(n, ast.Constant) and isinstance(n.value, str)
+               and any(mark in n.value for mark in marks) for n in ast.walk(node))
+
+
+def _only_text(old: object, new: object, guarded: bool = False) -> bool:
+    """Whether two subtrees are the same but for the values of str constants.
+
+    A str constant under a format spec, under the left of ``%`` when either side holds a
+    ``%``, or under the receiver of ``.format`` when either side holds a brace, is ``guarded``:
+    changing it can make the formatting itself fail, so it must not change at all.
+    """
+    if isinstance(old, list) and isinstance(new, list):
+        return len(old) == len(new) and all(
+            _only_text(a, b, guarded) for a, b in zip(old, new, strict=True))
+    if not (isinstance(old, ast.AST) and isinstance(new, ast.AST)):
+        return old == new
+    if type(old) is not type(new):
+        return False
+    if isinstance(old, ast.Constant) and isinstance(new, ast.Constant) and not guarded:
+        if isinstance(old.value, str) and isinstance(new.value, str):
+            return True
+    for name, value in ast.iter_fields(old):
+        other = getattr(new, name)
+        inner = guarded or (isinstance(old, ast.FormattedValue) and name == "format_spec")
+        if isinstance(old, ast.BinOp) and isinstance(old.op, ast.Mod) and name == "left":
+            inner = inner or _placeholder_in(value, "%") or _placeholder_in(other, "%")
+        if isinstance(old, ast.Attribute) and old.attr == "format" and name == "value":
+            inner = inner or _placeholder_in(value, "{}") or _placeholder_in(other, "{}")
+        if not _only_text(value, other, inner):
+            return False
+    return True
+
+
+def _inert_value(old: ast.AST, new: ast.AST) -> bool:
+    """A whole argument, keyword value or cause that changed only inertly (see ``diagnostic``)."""
+    return (isinstance(new, ast.Constant) and new.value is None) or _only_text(old, new)
+
+
+def _inert_raise(old: ast.Raise, new: ast.Raise) -> bool:
+    """Every difference between two raises that mask equal lies in an inert change."""
+    if isinstance(old.exc, ast.Call):
+        was, call = old.exc, new.exc
+        assert isinstance(call, ast.Call)  # the masks are equal, so the callee is too
+        if len(was.args) != len(call.args) or not all(
+                _inert_value(a, b) for a, b in zip(was.args, call.args, strict=True)):
+            return False
+        remaining = iter(was.keywords)
+        for kept in call.keywords:
+            match = next((k for k in remaining if k.arg == kept.arg), None)
+            if match is None or not _inert_value(match.value, kept.value):
+                return False
+    if old.cause is not None:
+        assert new.cause is not None  # the masks are equal, so a cause is still there
+        return _inert_value(old.cause, new.cause)
+    return True
+
+
 def _indent(line: str) -> str:
     return line[:len(line) - len(line.lstrip())]
 
 
 def diagnostic(source: str, line: int, removed: list[str], added: list[str]) -> bool:
-    """Whether the mutation lies wholly inside the arguments of a raise's exception, or its cause.
+    """Whether the mutation changes only what a raise's exception says, not which one escapes.
 
     The mutation is applied to the source (mutmut's diff of a method is dedented, so the file's
     own indentation is restored), both versions are parsed, and they must differ and become
     identical once every raise's constructor arguments and from-cause are blanked. Anything
     that cannot be checked that way, a fragment that is not the source, a mutant that does not
     parse, a mutation that removes nothing, is not vouched for.
+
+    Lying inside the arguments is not enough: ``ValueError(1 / 0)`` raises ZeroDivisionError
+    and ``ValueError(1 * 0)`` raises ValueError. So each raise is paired with the one in the
+    same position in the mutant, and every difference between them must be inert: (a) the
+    value of a str constant changed, an f-string's literal parts included, but not a format
+    spec, not the left of ``%`` holding a ``%``, and not the receiver of ``.format`` holding a
+    brace, since those can make the formatting itself fail; (b) a whole argument, keyword value
+    or cause became the constant None; or (c) keyword arguments were dropped, the remaining
+    ones, matched by name, being inert themselves. (b) and (c) remove evaluation rather than
+    change it: if the original argument had itself raised, the raise would never have worked,
+    and a test would have noticed. Any other difference, an operator, a number, a name, a call,
+    an attribute, a subscript, a changed count of positional arguments, is behavioural.
     """
     lines = source.splitlines()
     end = line - 1 + len(removed)
@@ -385,7 +457,12 @@ def diagnostic(source: str, line: int, removed: list[str], added: list[str]) -> 
         return False
     if ast.dump(before) == ast.dump(after):
         return False
-    return _masked(before) == _masked(after)
+    if _masked(copy.deepcopy(before)) != _masked(copy.deepcopy(after)):
+        return False
+    # The masks are equal, so both hold the same raises in the same places.
+    old = [n for n in ast.walk(before) if isinstance(n, ast.Raise)]
+    new = [n for n in ast.walk(after) if isinstance(n, ast.Raise)]
+    return all(_inert_raise(a, b) for a, b in zip(old, new, strict=True))
 
 
 def survivor_class(source: str | None, line: int, removed: list[str], added: list[str],

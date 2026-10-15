@@ -42,14 +42,12 @@ class C:
     (3, ['        raise ValueError(f"bad {x}", code="e.x.f")'],
      ['        raise ValueError(f"bad {x}", code="XXe.x.fXX")']),
     (3, ['        raise ValueError(f"bad {x}", code="e.x.f")'],
-     ['        raise ValueError(f"bad {None}", code="e.x.f")']),
-    (3, ['        raise ValueError(f"bad {x}", code="e.x.f")'],
      ['        raise ValueError(f"bad {x}", )']),
     (4, ['    raise KeyError("missing") from err'], ['    raise KeyError("missing") from None']),
     (6, ['                         field="name")'], ['                         field=None)']),
     # A method's diff is dedented by mutmut; the file's own indentation is restored.
     (16, ['    raise ValueError("a", self.x)'], ['    raise ValueError("a", None)']),
-], ids=["positional", "keyword", "fstring-field", "dropped-keyword", "from-cause",
+], ids=["positional", "keyword", "dropped-keyword", "from-cause",
         "continuation-line", "method"])
 def test_a_change_inside_a_raises_arguments_is_diagnostic(line, removed, added):
     assert shared.diagnostic(SOURCE, line, removed, added)
@@ -72,15 +70,75 @@ def test_a_change_inside_a_raises_arguments_is_diagnostic(line, removed, added):
     (2, ['    if x:', '        raise ValueError(f"bad {x}", code="e.x.f")'],
      ['    if not x:', '        raise ValueError(None, code="e.x.f")']),  # partly outside
     (16, ['          raise ValueError("a", self.x)'], ['          raise ValueError("a", 1)']),
+    # Not an inert change: the field's value is no longer formatted, so its __format__ no
+    # longer runs and whatever it raised no longer escapes.
+    (3, ['        raise ValueError(f"bad {x}", code="e.x.f")'],
+     ['        raise ValueError(f"bad {None}", code="e.x.f")']),
 ], ids=["callee", "removed", "after", "bare", "callee-args", "cause-dropped", "nothing-removed",
         "mismatch", "beyond", "line-zero", "unparsable", "unchanged", "partly-outside",
-        "indent-mismatch"])
+        "indent-mismatch", "fstring-field"])
 def test_anything_else_is_behavioural(line, removed, added):
     assert not shared.diagnostic(SOURCE, line, removed, added)
 
 
 def test_unparsable_source_is_behavioural():
     assert not shared.diagnostic("def (:\n", 1, ["def (:"], ["def ):"])
+
+
+# A difference inside a raise's arguments is diagnostic only when it is inert: it changes the
+# text of a str constant, replaces a whole argument, keyword value or cause with None, or drops
+# keywords. Anything else can change which exception escapes, not only what it says.
+INERT = '''\
+def g(x, d, err):
+    raise ValueError(1 / 0)
+    raise ValueError(x[0])
+    raise ValueError(x)
+    raise ValueError("{} bad".format(x))
+    raise ValueError("bad", code="e.x.f")
+    raise ValueError(f"bad {x} here")
+    raise ValueError(x, code=d, field="f")
+    raise KeyError("missing") from err
+    raise ValueError("%s bad" % x)
+    raise ValueError(f"{x:>3}")
+    raise ValueError(x, x)
+    raise ValueError(x, code=d)
+'''
+
+
+@pytest.mark.parametrize("line, removed, added", [
+    (2, ['    raise ValueError(1 / 0)'], ['    raise ValueError(1 * 0)']),
+    (3, ['    raise ValueError(x[0])'], ['    raise ValueError(x[1])']),
+    (4, ['    raise ValueError(x)'], ['    raise ValueError(d)']),
+    (5, ['    raise ValueError("{} bad".format(x))'],
+     ['    raise ValueError("XX{} badXX".format(x))']),
+    (10, ['    raise ValueError("%s bad" % x)'], ['    raise ValueError("XX%s badXX" % x)']),
+    (11, ['    raise ValueError(f"{x:>3}")'], ['    raise ValueError(f"{x:XX>3XX}")']),
+    (7, ['    raise ValueError(f"bad {x} here")'], ['    raise ValueError(f"bad {d} here")']),
+    (12, ['    raise ValueError(x, x)'], ['    raise ValueError(x)']),
+    (8, ['    raise ValueError(x, code=d, field="f")'],
+     ['    raise ValueError(x, code=d, field=d)']),
+    (13, ['    raise ValueError(x, code=d)'], ['    raise ValueError(x, other=d)']),
+], ids=["operator", "number", "name", "format-receiver-braces", "percent-left", "format-spec",
+        "fstring-name", "positional-dropped", "keyword-to-name",
+        "keyword-renamed"])
+def test_a_behavioural_change_inside_a_raises_arguments_is_not_diagnostic(line, removed, added):
+    assert not shared.diagnostic(INERT, line, removed, added)
+
+
+@pytest.mark.parametrize("line, removed, added", [
+    (6, ['    raise ValueError("bad", code="e.x.f")'],
+     ['    raise ValueError("XXbadXX", code="e.x.f")']),
+    (7, ['    raise ValueError(f"bad {x} here")'], ['    raise ValueError(f"XXbad {x} hereXX")']),
+    (4, ['    raise ValueError(x)'], ['    raise ValueError(None)']),
+    (8, ['    raise ValueError(x, code=d, field="f")'], ['    raise ValueError(x, field="f")']),
+    (8, ['    raise ValueError(x, code=d, field="f")'],
+     ['    raise ValueError(x, code=None, field="f")']),
+    (9, ['    raise KeyError("missing") from err'], ['    raise KeyError("missing") from None']),
+    (5, ['    raise ValueError("{} bad".format(x))'], ['    raise ValueError(None)']),
+], ids=["message", "fstring-literal", "arg-none", "keyword-dropped", "keyword-none",
+        "cause-none", "formatted-arg-none"])
+def test_an_inert_change_inside_a_raises_arguments_is_diagnostic(line, removed, added):
+    assert shared.diagnostic(INERT, line, removed, added)
 
 
 # --- classification of a survivor -------------------------------------------------------------

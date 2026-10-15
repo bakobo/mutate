@@ -25,8 +25,8 @@ success would look exactly like a clean run.
 
 Each record's ``class`` is ``string-only`` when the mutation changes nothing but the text inside
 string literals that are message text; ``diagnostic`` when it lies wholly inside the arguments
-of the exception a ``raise`` constructs, or that raise's ``from`` cause (``shared.diagnostic``),
-so the refusal stands and only what it says changes; and ``behavioural`` otherwise. The first
+of the exception a ``raise`` constructs, or that raise's ``from`` cause, and is inert there
+(``shared.diagnostic``), so the refusal stands and only what it says changes; and ``behavioural`` otherwise. The first
 two are counted rather than ticked. A literal is message text only when ``message_sink`` traces it,
 in the source, into an exception constructor in a ``raise``, a ``print``, a logging call,
 ``warnings.warn``, or a sink the repo declares as ``[tool.mutation] message_sinks`` in
