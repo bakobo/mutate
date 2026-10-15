@@ -489,11 +489,12 @@ def test_the_report_carries_each_survivors_class(repo, tmp_path):
     assert "| string-only |" in text and "| behavioural |" in text
 
 
-def test_a_survivor_inside_a_raises_arguments_is_diagnostic(repo, tmp_path):
-    # DIFF_SAIDIFY turns raise ValueError("no label") into raise ValueError(None).
+def test_a_raises_argument_made_none_is_behavioural(repo, tmp_path):
+    # DIFF_SAIDIFY turns raise ValueError("no label") into raise ValueError(None). An argument
+    # made None is never inert: the constructor's contract is invisible in the source.
     mutmut = stub(tmp_path / "bin", "mutmut", show_spec())
     saidify, opened = survivors_of(repo, mutmut, [NAME_SAIDIFY, NAME_OPEN])
-    assert saidify.kind == shared.DIAGNOSTIC and saidify.record([])["class"] == "diagnostic"
+    assert saidify.kind == BEHAVIOURAL and saidify.record([])["class"] == "behavioural"
     assert opened.kind == BEHAVIOURAL
 
 

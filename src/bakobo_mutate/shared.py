@@ -7,7 +7,6 @@ and the bounded reading of a report someone else produced (``read_report``).
 from __future__ import annotations
 
 import ast
-import builtins
 import copy
 import io
 import json
@@ -413,48 +412,45 @@ def _only_text(old: object, new: object, text: bool = True) -> bool:
     return True
 
 
-def _safe(node: ast.AST) -> bool:
-    """Whether evaluating ``node`` is trusted not to raise.
+def _bound(raise_: ast.Raise, parents: dict) -> set[str]:
+    """Names that cannot be unbound where ``raise_`` runs.
 
-    That is a name, a dotted chain of names, a constant, or an f-string or ``+`` built only
-    from those.
+    A candidate is a parameter of the enclosing function, or the name of the innermost
+    enclosing ``except ... as name`` whose body holds the raise. An except clause deletes its
+    name when it ends and ``del`` deletes one outright, so a candidate is dropped when the
+    function deletes it anywhere or any other except clause in it binds the same name.
     """
-    if isinstance(node, (ast.Name, ast.Constant)):
-        return True
-    if isinstance(node, ast.Attribute):
-        return _safe(node.value) and isinstance(node.value, (ast.Name, ast.Attribute))
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        return _safe(node.left) and _safe(node.right)
-    if isinstance(node, ast.JoinedStr):
-        return all(_safe(part) for part in node.values)
-    if isinstance(node, ast.FormattedValue):
-        return _safe(node.value) and (node.format_spec is None or _safe(node.format_spec))
-    return False
-
-
-def _takes_nones(callee: ast.AST, count: int) -> bool:
-    """Whether ``callee`` is a builtin exception's bare name that constructs from ``count`` Nones.
-
-    Constructing one runs only that builtin, so it is safe to try here; UnicodeDecodeError,
-    for one, refuses.
-    """
-    if not isinstance(callee, ast.Name):
-        return False
-    cls = getattr(builtins, callee.id, None)
-    if not (isinstance(cls, type) and issubclass(cls, BaseException)):
-        return False
-    try:
-        cls(*[None] * count)
-    except Exception:  # noqa: BLE001 - any refusal means None is not an inert argument
-        return False
-    return True
+    names: set[str] = set()
+    handlers: dict[str, ast.ExceptHandler] = {}
+    node: ast.AST = raise_
+    scope: ast.AST | None = None
+    while (parent := parents.get(node)) is not None:
+        if isinstance(parent, ast.ExceptHandler) and parent.name and node in parent.body:
+            handlers.setdefault(parent.name, parent)
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = parent.args
+            names.update(a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs])
+            names.update(a.arg for a in (args.vararg, args.kwarg) if a is not None)
+            scope = parent
+            break
+        node = parent
+    if scope is None:
+        return set()
+    names.update(handlers)
+    for inner in ast.walk(scope):
+        if isinstance(inner, ast.Delete):
+            names.difference_update(t.id for t in inner.targets if isinstance(t, ast.Name))
+        elif isinstance(inner, ast.ExceptHandler) and inner.name in names and (
+                handlers.get(inner.name) is not inner):
+            names.discard(inner.name)
+    return names
 
 
 def _is_none(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant) and node.value is None
 
 
-def _inert_raise(old: ast.Raise, new: ast.Raise) -> bool:
+def _inert_raise(old: ast.Raise, new: ast.Raise, bound: set[str]) -> bool:
     """Every difference between two raises that mask equal lies in an inert change."""
     if isinstance(old.exc, ast.Call):
         was, call = old.exc, new.exc
@@ -462,8 +458,7 @@ def _inert_raise(old: ast.Raise, new: ast.Raise) -> bool:
         if len(was.args) != len(call.args):
             return False
         for a, b in zip(was.args, call.args, strict=True):
-            if not (_only_text(a, b) or (_is_none(b) and _safe(a)
-                                         and _takes_nones(was.func, len(was.args)))):
+            if not _only_text(a, b):
                 return False
         # A constructor's keywords are its own contract, invisible here: one dropped, or made
         # None, can make the construction itself raise, so only their text may change.
@@ -473,7 +468,8 @@ def _inert_raise(old: ast.Raise, new: ast.Raise) -> bool:
             return False
     if old.cause is not None:
         assert new.cause is not None  # the masks are equal, so a cause is still there
-        return _only_text(old.cause, new.cause) or (_is_none(new.cause) and _safe(old.cause))
+        return _only_text(old.cause, new.cause) or (
+            _is_none(new.cause) and isinstance(old.cause, ast.Name) and old.cause.id in bound)
     return True
 
 
@@ -497,16 +493,17 @@ def diagnostic(source: str, line: int, removed: list[str], added: list[str]) -> 
     an f-string's literal part, the left of ``%`` holding no ``%``, or the receiver of
     ``.format`` holding no brace (``_text_flows``); a str that is a key, a call's argument, a
     format spec, the right of ``%`` or an argument of ``.format`` is behaviour: ``d["k"]``,
-    ``int("3")`` and ``"%c" % "A"`` raise differently when it changes; or (b) an argument or the
-    cause became the constant None, which removes its evaluation rather than changing it, and is
-    inert only when that evaluation could not have raised (the original is a name, a dotted
-    chain of names, a constant, or an f-string or ``+`` of those) and, for an argument, the
-    callee is a builtin exception's bare name that constructs from that many Nones
-    (``_takes_nones``; UnicodeDecodeError does not). A keyword dropped or made None is never
-    inert: a constructor's keywords are its own contract, which the AST cannot see. Any other
-    difference, an operator, a number, a name, a call, an attribute, a subscript, a changed
-    count of arguments, is behavioural. This leans behavioural on purpose: most survivors inside
-    a custom exception's arguments stay behavioural and become ticks.
+    ``int("3")`` and ``"%c" % "A"`` raise differently when it changes; or (b) the cause became
+    the constant None where it was a bare name that cannot be unbound there, a parameter of the
+    enclosing function or the name the innermost enclosing ``except`` binds, which that
+    function never deletes nor binds in another except clause (``_bound``). An argument or a
+    keyword made None, or a keyword dropped, is never inert: evaluating the original could have
+    raised (``x.y`` on an object without ``y``), the constructor may choose its class from it
+    (``OSError(2, ...)`` builds FileNotFoundError), and a constructor's contract, even which
+    class a bare name refers to, is invisible here. Any other difference, an operator, a number,
+    a name, a call, an attribute, a subscript, a changed count of arguments, is behavioural.
+    This leans behavioural on purpose: most survivors inside an exception's arguments stay
+    behavioural and become ticks.
     """
     lines = source.splitlines()
     end = line - 1 + len(removed)
@@ -529,9 +526,10 @@ def diagnostic(source: str, line: int, removed: list[str], added: list[str]) -> 
     if _masked(copy.deepcopy(before)) != _masked(copy.deepcopy(after)):
         return False
     # The masks are equal, so both hold the same raises in the same places.
+    parents = {child: node for node in ast.walk(before) for child in ast.iter_child_nodes(node)}
     old = [n for n in ast.walk(before) if isinstance(n, ast.Raise)]
     new = [n for n in ast.walk(after) if isinstance(n, ast.Raise)]
-    return all(_inert_raise(a, b) for a, b in zip(old, new, strict=True))
+    return all(_inert_raise(a, b, _bound(a, parents)) for a, b in zip(old, new, strict=True))
 
 
 def survivor_class(source: str | None, line: int, removed: list[str], added: list[str],

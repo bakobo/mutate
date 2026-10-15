@@ -188,7 +188,9 @@ def test_a_first_run_checks_everything_and_a_cached_run_only_survivors(toy):
     # The method form of a mutant name, which the per-function glob relies on.
     assert any(k.startswith(f"toy.alpha.x{SEP}Box{SEP}grow__mutmut_") for k in keys)
     assert survivors(target)
-    assert {s["class"] for s in data["survivors"]} >= {"behavioural", "diagnostic"}
+    # The toy's only raise argument is made None by mutmut, which is behavioural; the
+    # diagnostic class is pinned at unit level in tests/test_classes.py.
+    assert "behavioural" in {s["class"] for s in data["survivors"]}
     assert all(e["complete"] for e in stamp(target)["modules"].values())
 
     # (b) Nothing changed and survivors not asked for: mutmut generates and runs nothing.

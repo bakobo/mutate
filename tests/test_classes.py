@@ -38,13 +38,11 @@ class C:
 
 @pytest.mark.parametrize("line, removed, added", [
     (3, ['        raise ValueError(f"bad {x}", code="e.x.f")'],
-     ['        raise ValueError(None, code="e.x.f")']),
-    (3, ['        raise ValueError(f"bad {x}", code="e.x.f")'],
      ['        raise ValueError(f"bad {x}", code="XXe.x.fXX")']),
     (4, ['    raise KeyError("missing") from err'], ['    raise KeyError("missing") from None']),
     # A method's diff is dedented by mutmut; the file's own indentation is restored.
-    (16, ['    raise ValueError("a", self.x)'], ['    raise ValueError("a", None)']),
-], ids=["positional", "keyword", "from-cause", "method"])
+    (16, ['    raise ValueError("a", self.x)'], ['    raise ValueError("XXaXX", self.x)']),
+], ids=["keyword", "from-cause", "method"])
 def test_a_change_inside_a_raises_arguments_is_diagnostic(line, removed, added):
     assert shared.diagnostic(SOURCE, line, removed, added)
 
@@ -114,6 +112,12 @@ def g(x, d, err):
     raise ValueError(x.y.z, f"at {x.y}" + "!")
     raise dict(x)
     raise errors.Refused(x)
+    raise KeyError("missing") from cause
+    raise OSError(2, "missing")
+    try:
+        pass
+    except OSError as e:
+        raise KeyError("missing") from e
 '''
 
 
@@ -155,13 +159,25 @@ def g(x, d, err):
     (8, ['    raise ValueError(x, code=d, field="f")'], ['    raise ValueError(x, field="f")']),
     (8, ['    raise ValueError(x, code=d, field="f")'],
      ['    raise ValueError(x, code=None, field="f")']),
+    # Even a name or a dotted chain made None is behavioural: an attribute lookup can raise,
+    # OSError(2, ...) builds FileNotFoundError where OSError(None, ...) does not, and the name
+    # may not be the builtin at all.
+    (4, ['    raise ValueError(x)'], ['    raise ValueError(None)']),
+    (22, ['    raise ValueError(x.y.z, f"at {x.y}" + "!")'],
+     ['    raise ValueError(None, f"at {x.y}" + "!")']),
+    (22, ['    raise ValueError(x.y.z, f"at {x.y}" + "!")'], ['    raise ValueError(x.y.z, None)']),
+    (26, ['    raise OSError(2, "missing")'], ['    raise OSError(None, "missing")']),
+    # A cause made None is inert only for a parameter or the name an enclosing except binds;
+    # any other name may be unbound.
+    (25, ['    raise KeyError("missing") from cause'], ['    raise KeyError("missing") from None']),
 ], ids=["operator", "number", "name", "format-receiver-braces", "percent-left", "format-spec",
         "fstring-name", "positional-dropped", "keyword-to-name",
         "keyword-renamed", "subscript-key", "call-argument", "concatenated-name",
         "argument-to-number", "percent-right", "format-argument", "unsafe-arg-none",
         "custom-exception-none", "unicode-decode-none", "unsafe-cause-none", "not-an-exception",
         "dotted-callee-none", "formatted-arg-none", "percent-arg-none", "keyword-dropped",
-        "keyword-none"])
+        "keyword-none", "arg-none", "dotted-arg-none", "built-arg-none", "oserror-none",
+        "unbound-cause-none"])
 def test_a_behavioural_change_inside_a_raises_arguments_is_not_diagnostic(line, removed, added):
     assert not shared.diagnostic(INERT, line, removed, added)
 
@@ -170,14 +186,11 @@ def test_a_behavioural_change_inside_a_raises_arguments_is_not_diagnostic(line, 
     (6, ['    raise ValueError("bad", code="e.x.f")'],
      ['    raise ValueError("XXbadXX", code="e.x.f")']),
     (7, ['    raise ValueError(f"bad {x} here")'], ['    raise ValueError(f"XXbad {x} hereXX")']),
-    (4, ['    raise ValueError(x)'], ['    raise ValueError(None)']),
     (9, ['    raise KeyError("missing") from err'], ['    raise KeyError("missing") from None']),
-    (22, ['    raise ValueError(x.y.z, f"at {x.y}" + "!")'],
-     ['    raise ValueError(None, f"at {x.y}" + "!")']),
-    (22, ['    raise ValueError(x.y.z, f"at {x.y}" + "!")'], ['    raise ValueError(x.y.z, None)']),
     (16, ['    raise ValueError("bad " + x)'], ['    raise ValueError("XXbad XX" + x)']),
-], ids=["message", "fstring-literal", "arg-none", "cause-none", "concatenated",
-        "dotted-arg-none", "built-arg-none"])
+    (30, ['        raise KeyError("missing") from e'], ['        raise KeyError("missing") from None']),
+], ids=["message", "fstring-literal", "parameter-cause-none", "concatenated",
+        "handler-cause-none"])
 def test_an_inert_change_inside_a_raises_arguments_is_diagnostic(line, removed, added):
     assert shared.diagnostic(INERT, line, removed, added)
 
@@ -185,16 +198,59 @@ def test_an_inert_change_inside_a_raises_arguments_is_diagnostic(line, removed, 
 # --- classification of a survivor -------------------------------------------------------------
 
 
-@pytest.mark.parametrize("removed, added, sink, kind", [
-    (['    raise ValueError("a", self.x)'], ['    raise ValueError("XXaXX", self.x)'],
+@pytest.mark.parametrize("line, removed, added, sink, kind", [
+    (16, ['    raise ValueError("a", self.x)'], ['    raise ValueError("XXaXX", self.x)'],
      "raise ValueError", shared.STRING_ONLY),
-    (['    raise ValueError("a", self.x)'], ['    raise ValueError("a", None)'], None,
-     shared.DIAGNOSTIC),
-    (['    raise ValueError("a", self.x)'], ['    raise TypeError("a", self.x)'], None,
+    (4, ['    raise KeyError("missing") from err'], ['    raise KeyError("missing") from None'],
+     None, shared.DIAGNOSTIC),
+    (16, ['    raise ValueError("a", self.x)'], ['    raise TypeError("a", self.x)'], None,
      shared.BEHAVIOURAL),
 ], ids=["string-only-wins", "diagnostic", "behavioural"])
-def test_survivor_class(removed, added, sink, kind):
-    assert shared.survivor_class(SOURCE, 16, removed, added, sink) == kind
+def test_survivor_class(line, removed, added, sink, kind):
+    assert shared.survivor_class(SOURCE, line, removed, added, sink) == kind
+
+
+UNBINDS = '''\
+def f(err):
+    try:
+        g()
+    except ValueError as err:
+        pass
+    raise KeyError("missing") from err
+
+
+def h():
+    try:
+        a()
+    except OSError as e:
+        try:
+            b()
+        except ValueError as e:
+            pass
+        raise KeyError("missing") from e
+
+
+def k(err):
+    del err
+    raise KeyError("missing") from err
+'''
+
+
+@pytest.mark.parametrize("line", [6, 17, 22], ids=["handler-shadows-parameter",
+                                                  "inner-handler-reuses-name", "deleted"])
+def test_a_cause_name_something_can_unbind_is_not_inert_when_made_none(line):
+    # An except clause deletes its name on exit, and del deletes it outright, so the original
+    # raise can fail with UnboundLocalError where the mutant raises the exception it builds.
+    raw = UNBINDS.splitlines()[line - 1]
+    mutant = raw.rpartition(" from ")[0] + " from None"
+    assert not shared.diagnostic(UNBINDS, line, [raw], [mutant])
+
+
+def test_a_module_level_cause_made_none_is_behavioural():
+    # No enclosing function binds the name, so it may be unbound there.
+    source = 'raise KeyError("missing") from err\n'
+    assert not shared.diagnostic(source, 1, ['raise KeyError("missing") from err'],
+                                 ['raise KeyError("missing") from None'])
 
 
 def test_without_source_nothing_is_diagnostic():
@@ -260,12 +316,12 @@ def test_ticks_counts_diagnostic_survivors_and_files_the_rest(ledger_repo, tmp_p
     report = tmp_path / "r.json"
     report.write_text(json.dumps({"schema": shared.SCHEMA, "commit": commit, "failure": None,
                                   "survivors": [
-        record("a" * 12, 16, ['    raise ValueError("a", self.x)'],
-               ['    raise ValueError("a", None)']),
+        record("a" * 12, 4, ['    raise KeyError("missing") from err'],
+               ['    raise KeyError("missing") from None']),
         record("b" * 12, 8, ['    raise TypeError(x)'], ['    raise ValueError(x)']),
         # The file is gone at that commit, so nothing can vouch for it.
-        record("c" * 12, 16, ['    raise ValueError("a", self.x)'],
-               ['    raise ValueError("a", None)'], file="src/gone.py"),
+        record("c" * 12, 4, ['    raise KeyError("missing") from err'],
+               ['    raise KeyError("missing") from None'], file="src/gone.py"),
     ]}))
     assert ticks.main([str(root), "--report", str(report), "--tick", str(tick)]) == 0
     adds = [line for line in (tick.parent / "tick.log").read_text().splitlines()
